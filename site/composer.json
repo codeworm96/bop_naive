@@ -1,0 +1,13 @@
+{
+    "name": "codeworm96/bop_naive",
+    "description": "BOP naive site",
+    "type": "project",
+    "private": true,
+    "authors": [
+        {
+            "name": "ComMouse",
+            "email": "hanyikai1996@126.com"
+        }
+    ],
+    "require": {}
+}
