@@ -8,7 +8,7 @@ This is the BOP site (PHP Version) using [Slim](http://www.slimframework.com/) m
 
 We recommend to use [PHP PPA](https://launchpad.net/~ondrej/+archive/ubuntu/php) to install PHP. You should have `apt-get` installed first.
 
-Since PHP 7.0 is nearly twice as fast of PHP 5.6, we recommend to install the latest 7.0 version.
+Since PHP 7.0 is nearly twice as fast as PHP 5.6, we recommend to install the latest 7.0 version.
 
 ```bash
 sudo add-apt-repository ppa:ondrej/php
@@ -20,7 +20,7 @@ sudo apt-get install php7.0 php7.0-cli php7.0-fpm php7.0-curl php7.0-json php7.0
 
 ### Dependencies
 
-To install this site, you need to install [Composer](http://www.phpcomposer.com/) first. Composer is a package manager of PHP packages.
+To configure this site, you need to install [Composer](http://www.phpcomposer.com/) first. Composer is a package manager for PHP packages.
 
 After Composer is installed, execute the following commands in `site` directory:
 
@@ -46,7 +46,7 @@ A simple way to start this site is to run the following command:
 php -S localhost:8000 -t ./site/public
 ```
 
-For performance, we need to configure it with nginx. Here is the [PPA Repository](https://launchpad.net/~nginx/+archive/ubuntu/stable).
+For performance reasons, we need to configure it with nginx. Here is the [PPA Repository](https://launchpad.net/~nginx/+archive/ubuntu/stable).
 
 ```bash
 sudo add-apt-repository ppa:nginx/stable
@@ -88,7 +88,7 @@ Create a symbol link in `sites-enabled`:
 
 ```bash
 cd /etc/nginx/sites-enabled
-ln -s ../sites-available/bop-site bop-site
+sudo ln -s ../sites-available/bop-site bop-site
 sudo nginx -t # Check configuration file
 ```
 
@@ -99,4 +99,4 @@ Then restart nginx:
 sudo service nginx restart
 ```
 
-If the configuration is OK, you should see the site work in `http://localhost:80/`.
+If all things are OK, you should see the site work at `http://localhost:80/`.
