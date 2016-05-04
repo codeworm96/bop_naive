@@ -3,11 +3,20 @@
     "description": "BOP naive site",
     "type": "project",
     "private": true,
+    "repositories": {
+        "packagist": {
+            "type": "composer",
+            "url": "https://packagist.phpcomposer.com"
+        }
+    },
     "authors": [
         {
             "name": "ComMouse",
             "email": "hanyikai1996@126.com"
         }
     ],
-    "require": {}
+    "require": {
+        "slim/slim": "^3.0",
+        "guzzlehttp/guzzle": "~6.0"
+    }
 }

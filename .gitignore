@@ -2,6 +2,9 @@
 *.log
 *.sql
 
+# Ignore Composer files
+vendor/
+
 # Ignore JetBrains files
 .idea/
 
