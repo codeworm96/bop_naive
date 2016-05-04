@@ -1,0 +1,12 @@
+# Ignore private files
+*.log
+*.sql
+
+# Ignore JetBrains files
+.idea/
+
+# Ignore Mac OS files
+.DS_Store
+
+# Ignore sublime files
+*.sublime-*
