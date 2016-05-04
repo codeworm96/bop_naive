@@ -5,10 +5,15 @@ use \Psr\Http\Message\ResponseInterface as Response;
 require '../vendor/autoload.php';
 
 $app = new \Slim\App;
-$app->get('/hello/{name}', function (Request $request, Response $response) {
-    $name = $request->getAttribute('name');
-    $response->getBody()->write("Hello, $name");
+$app->any('/', function (Request $request, Response $response) {
+    // Fetch the array from request
+    $data = $request->getParsedBody();
 
-    return $response;
+    // Process Data......
+
+    $result = [];   // Empty array
+
+    // Return processed result
+    return $response->withJson($result);
 });
 $app->run();
