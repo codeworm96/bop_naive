@@ -31,7 +31,7 @@ composer install
 Or:
 
 ```bash
-php composer phar.install
+php composer.phar install
 ```
 
 A `vendor` directory should appear in your `site` directory.
@@ -92,11 +92,11 @@ ln -s ../sites-available/bop-site bop-site
 sudo nginx -t # Check configuration file
 ```
 
-If you want to make theses steps easier, just create `bop-site.conf` in `/etc/nginx/conf.d`. No symbol links needed if you follow this way.
+If you want to make theses steps easier, just create `bop-site.conf` in `/etc/nginx/conf.d`. No symbol links are needed if you follow this way.
 
 Then restart nginx:
 ```bash
 sudo service nginx restart
 ```
 
-If the configuration is OK, you should see the site works in `http://localhost:80/`.
+If the configuration is OK, you should see the site work in `http://localhost:80/`.
