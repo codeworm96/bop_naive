@@ -6,8 +6,9 @@ require '../vendor/autoload.php';
 
 $app = new \Slim\App;
 $app->any('/', function (Request $request, Response $response) {
-    // Fetch the array from request
-    $data = $request->getParsedBody();
+    // Input from request
+    $id1 = $request->getAttribute('id1');
+    $id2 = $request->getAttribute('id2');
 
     // Process Data......
 
