@@ -33,7 +33,7 @@ class Paper(object):
 def has_intersection(b1, b2):
   return bool(set(b1).intersection(set(b2)))
 
-async def http_request(expr, count=None, attributes=None):
+async def send_http_request(expr, count=None, attributes=None):
   params = {'expr': expr, 'subscription-key': subscription_key}
   if count:
     params['count'] = count
@@ -43,14 +43,13 @@ async def http_request(expr, count=None, attributes=None):
     async with session.get(bop_url, params=params) as resp:
       return await resp.json()
 
-# fetch a detailed information of a paper
-async def fetch_paper(paid):
-  paids = [paid] if isinstance(paid, int) else paid
+# fetch detailed information of papers
+async def fetch_paper(paids):
   expr = ''
   for paid in paids:
     tmp = 'Id=%d' % (paid)
-    expr = 'OR(%s,%s)' % (expr,tmp) if expr else tmp
-  resp = await http_request(expr, count=len(paids), attributes=['Id', 'F.FId', 'C.CId', 'J.JId', 'AA.AuId', 'RId'])
+    expr = 'OR(%s,%s)' % (expr, tmp) if expr else tmp
+  resp = await send_http_request(expr, count=len(paids), attributes=['Id', 'F.FId', 'C.CId', 'J.JId', 'AA.AuId', 'RId'])
   entities = resp['entities']
   if len(entities) != len(paids):
     return None
@@ -76,7 +75,7 @@ async def fetch_paper(paid):
 
 # TODO: fetch papers of one author
 async def fetch_author(auid, count=1000):
-  print(await http_request('Composite(AA.AuId=%d)' % (auid), count=count, attributes=['Id', 'AA.AuId', 'AA.AfId']))
+  print(await send_http_request('Composite(AA.AuId=%d)' % (auid), count=count, attributes=['Id', 'AA.AuId', 'AA.AfId']))
 
 async def solve_1hop(id1, id2):
   # TODO: assert both ids are Id, not AA.AuId
@@ -91,8 +90,8 @@ async def solve_1hop(id1, id2):
 async def worker(request):
   d = request.GET
   id1, id2 = int(d['id1']), int(d['id2'])
-  print(await solve_1hop(id1, id2))
-  return web.Response(body=b"It works!")
+  result = await solve_1hop(id1, id2)
+  return web.json_response(result)
 
 if __name__ == '__main__':
   if len(argv) == 1:
