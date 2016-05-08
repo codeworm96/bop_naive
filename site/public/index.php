@@ -7,10 +7,11 @@ require '../vendor/autoload.php';
 $app = new \Slim\App;
 $app->any('/', function (Request $request, Response $response) {
     // Input from request
-    $id1 = $request->getAttribute('id1');
-    $id2 = $request->getAttribute('id2');
+    $id1 = $request->getQueryParam('id1', 0);
+    $id2 = $request->getQueryParam('id2', 0);
 
     // Process Data......
+    // See [Guzzle](http://docs.guzzlephp.org/en/latest/) for how to send requests synchronously or asynchronously
 
     $result = [];   // Empty array
 
