@@ -13,3 +13,6 @@ vendor/
 
 # Ignore sublime files
 *.sublime-*
+
+# Ignore composer.phar
+site/composer.phar
