@@ -1,18 +1,1 @@
-# Ignore private files
-*.log
-*.sql
-
-# Ignore Composer files
-vendor/
-
-# Ignore JetBrains files
-.idea/
-
-# Ignore Mac OS files
-.DS_Store
-
-# Ignore sublime files
-*.sublime-*
-
-# Ignore composer.phar
-site/composer.phar
+*swp
