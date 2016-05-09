@@ -166,7 +166,7 @@ async def solve_ap(auid: int, paper: Paper):
     # author -> ? (paper) -> paper
     resp = await send_http_request('AND(Composite(AA.AuId=%d),RId=%d)' % (auid, paper.id), count=count, attributes=paper_attributes)
     papers = list(map(parse_paper_json, resp['entities']))
-    return list(map(lambda middle_paper: [auid, middle_paper.id, paper.id]), papers)
+    return list(map(lambda middle_paper: [auid, middle_paper.id, paper.id], papers))
 
   # TODO: lower granularity
   return await solve_1hop(auid, paper) + await solve_2hop(auid, paper)
@@ -210,7 +210,7 @@ async def worker(request):
   except (ValueError, KeyError):
     logger.warn('invalid request \'%s\'' % request.query_string)
     return web.json_response([])
-  logger.info('incoming request with id1=%d id2=%d' % (id1, id2))
+  logger.info('accepting request with id1=%d id2=%d' % (id1, id2))
   result = await solve(id1, id2)
   return web.json_response(result)
 
@@ -229,7 +229,7 @@ if __name__ == '__main__':
       datefmt='%H:%M:%S',
       level=logging.DEBUG)
 
-  ### DEBUG section ###
+  ### begin DEBUG section ###
 
   async def debug_f():
     # await fetch_papers([2166559705, 2002089154, 1679644680, 2243171526, 1632114991, 2158864412, 1597161471, 1515932031, 1558832481, 2138709157, 2100406636, 1833785989, 1520890006, 1545155892, 1578959085, 1597561788, 2160293203])
@@ -242,7 +242,7 @@ if __name__ == '__main__':
     loop.close()
     exit(0)
 
-  ### DEBUG section ###
+  ### end DEBUG section ###
 
   app = web.Application()
   app.router.add_route('GET', '/bop', worker)
