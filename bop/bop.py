@@ -78,7 +78,6 @@ async def fetch_papers(paids):
     tmp = 'Id=%d' % (paid)
     expr = 'OR(%s,%s)' % (expr, tmp) if expr else tmp
   resp = await send_http_request(expr, count=len(paids), attributes=paper_attributes)
-  print(resp)
   entities = resp['entities']
   if len(entities) != len(paids):
     return None
@@ -110,11 +109,8 @@ async def search_authors_by_affiliation(afid, count=default_count):
 
   resp = await send_http_request('Composite(AA.AfId=%d)' % (afid), count=count, attributes=paper_attributes)
   papers = list(map(lambda e: parse_paper_json(e), resp['entities']))
-  print(papers[0].auid, papers[0].afid)
   authors = map(lambda p: filter_afid(p.auid, p.afid), papers)
-  xxx = list(reduce(lambda s1, s2: set(s1) | set(s2), authors))
-  print(xxx)
-  return xxx
+  return list(reduce(lambda s1, s2: set(s1) | set(s2), authors))
 
 async def solve_pp(paper1: Paper, paper2: Paper):
   async def solve_1hop(paper1, paper2):
