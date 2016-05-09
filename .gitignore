@@ -1,1 +1,8 @@
+# vim swap files
 *swp
+
+# logs
+bop.log
+
+# python temporary files
+*.pyc
