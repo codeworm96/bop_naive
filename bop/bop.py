@@ -1,5 +1,5 @@
 import asyncio, aiohttp
-import logging
+import logging, time
 from aiohttp import web
 from sys import argv, stderr
 from functools import reduce
@@ -9,10 +9,15 @@ from functools import reduce
 # 2. split asynchronous IO operations into a suitable granularity, to get partial search results before time expired;
 # 3. comprehensive logger.
 
+start_time = time.time() 
 logger = logging.getLogger(__name__)
 subscription_key = 'f7cc29509a8443c5b3a5e56b0e38b5a6'
 bop_url = 'https://oxfordhk.azure-api.net/academic/v1.0/evaluate'
 default_count = 1000
+time_limit = 300
+
+def get_elapsed_time():
+  return time.time() - start_time
 
 def get_intersection(b1, b2):
   return list(set(b1).intersection(set(b2)))
@@ -101,7 +106,7 @@ async def search_papers_by_rid(rid, count=default_count):
   resp = await send_http_request('RId=%d' % (rid), count=count, attributes=paper_attributes)
   return list(map(parse_paper_json, resp['entities']))
 
-# fetch papers of one author
+# fetch papermport times of one author
 async def search_papers_by_author(auid, count=default_count):
   resp = await send_http_request('Composite(AA.AuId=%d)' % (auid), count=count, attributes=paper_attributes)
   return list(map(parse_paper_json, resp['entities']))
@@ -141,7 +146,33 @@ async def solve_pp(paper1: Paper, paper2: Paper):
     return fjoint + cjoint + jjoint + aujoint + rjoint
 
   # TODO: lower granularity
-  return await solve_1hop(paper1, paper2) + await solve_2hop(paper1, paper2)
+  hop12 = await solve_1hop(paper1, paper2) + await solve_2hop(paper1, paper2)
+
+  # TODO: the following codes are just wild codes to improve benchmarks, need refactoring
+  async def search_forward_reference(rid):
+    papers = await fetch_papers([rid])
+    if not papers:
+      return []
+    result = await solve_2hop(papers[0], paper2)
+    return list(map(lambda l: [paper1.id] + l, result))
+
+  async def search_backward_reference(rid):
+    papers = await fetch_papers([rid])
+    if not papers:
+      return []
+    result = await solve_2hop(paper1, papers[0])
+    return list(map(lambda l: l + [paper2.id], result))
+
+  paper2_ref = await search_papers_by_rid(paper2.id)
+  paper2_refids = map(lambda paper: paper.id, paper2_ref) # TODO: duplicate query
+  tasks = list(map(lambda ref: search_forward_reference(ref), paper1.rid))
+  tasks += list(map(lambda ref: search_backward_reference(ref), paper2_refids))
+  if tasks:
+    hop3_done, _ = await asyncio.wait(tasks, timeout=time_limit-get_elapsed_time())
+    hop3 = list(reduce(lambda l1, l2: l1+l2, map(lambda future: future.result(), hop3_done)))
+  else:
+    hop3 = []
+  return hop12 + hop3
 
 async def solve_aa(auid1: int, auid2: int):
   async def solve_1hop(auid1, auid2):
