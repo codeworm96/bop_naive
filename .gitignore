@@ -6,3 +6,6 @@ bop.log
 
 # python temporary files
 *.pyc
+
+# misc
+makefile

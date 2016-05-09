@@ -62,6 +62,13 @@ TYPE_UNKNOWN = 0
 TYPE_PAPER = 1
 TYPE_AUTHOR = 2
 
+def show_type(ty):
+  if ty == TYPE_PAPER:
+    return 'type-paper'
+  if ty == TYPE_AUTHOR:
+    return 'type-author'
+  return 'type-unknown'
+
 # get the type of one id, return a pair (TYPE_XXX, Paper object if TYPE_PAPER / AA.AuId if TYPE_AUTHOR)
 async def get_id_type(id):
   resp = await send_http_request('OR(Id=%d,Composite(AA.AuId=%d))' % (id, id), count=1, attributes=paper_attributes+['Ti'])
@@ -187,6 +194,7 @@ async def solve_pa(paper: Paper, auid: int):
 
 async def solve(id1, id2):
   (type1, obj1), (type2, obj2) = await asyncio.gather(get_id_type(id1), get_id_type(id2))
+  logger.info('solving test (%d,%s), (%d,%s)' % (id1, show_type(type1), id2, show_type(type2)))
   if type1 == TYPE_PAPER and type2 == TYPE_PAPER:
     assert obj1.id == id1 and obj2.id == id2
     return await solve_pp(obj1, obj2)
@@ -198,9 +206,9 @@ async def solve(id1, id2):
     return await solve_pa(obj1, obj2)
   else:
     if type1 == TYPE_UNKNOWN:
-      logger.warn('TYPE_UNKNOWN found, id=%d' % id1)
+      logger.warn('type-unknown found, id=%d' % id1)
     if type2 == TYPE_UNKNOWN:
-      logger.warn('TYPE_UNKNOWN found, id=%d' % id2)
+      logger.warn('type-unknown found, id=%d' % id2)
     return []
 
 async def worker(request):
@@ -212,6 +220,7 @@ async def worker(request):
     return web.json_response([])
   logger.info('accepting request with id1=%d id2=%d' % (id1, id2))
   result = await solve(id1, id2)
+  logger.info('%d -> %d: %s' % (id1, id2, str(result)))
   return web.json_response(result)
 
 if __name__ == '__main__':
@@ -230,18 +239,15 @@ if __name__ == '__main__':
       level=logging.DEBUG)
 
   ### begin DEBUG section ###
-
   async def debug_f():
     # await fetch_papers([2166559705, 2002089154, 1679644680, 2243171526, 1632114991, 2158864412, 1597161471, 1515932031, 1558832481, 2138709157, 2100406636, 1833785989, 1520890006, 1545155892, 1578959085, 1597561788, 2160293203])
     await search_authors_by_affiliation(79576946)
-
-  debug = True
+  debug = False
   if debug:
     loop = asyncio.get_event_loop()
     loop.run_until_complete(debug_f())
     loop.close()
     exit(0)
-
   ### end DEBUG section ###
 
   app = web.Application()
@@ -250,5 +256,3 @@ if __name__ == '__main__':
   logger.info('bop server started')
 
   web.run_app(app, port=port)
-
-# http://127.0.0.1:8080/bop?id1=2187851011&id2=1520890006
