@@ -14,7 +14,11 @@ logger = logging.getLogger(__name__)
 subscription_key = 'f7cc29509a8443c5b3a5e56b0e38b5a6'
 bop_url = 'https://oxfordhk.azure-api.net/academic/v1.0/evaluate'
 default_count = 1000
-time_limit = 300
+time_limit = 300 # TODO: 300 is not a suitable value, see how score is evaluated
+
+def set_start_time():
+  global start_time
+  start_time = time.time()
 
 def get_elapsed_time():
   return time.time() - start_time
@@ -24,6 +28,9 @@ def get_intersection(b1, b2):
 
 def get_union(b1, b2):
   return list(set(b1) | set(b2))
+
+def make_unique(l):
+  return list(set(l))
 
 async def send_http_request(expr, count=None, attributes=None):
   params = {'expr': expr, 'subscription-key': subscription_key}
@@ -45,7 +52,7 @@ class Paper(object):
     self.cid = cid if cid else []
     self.jid = jid if jid else []
     self.auid = auid if auid else []
-    self.afid = afid if afid else [] # afid can be None if not available
+    self.afid = afid if afid else [] # element of afid can be None if not available
     self.rid = rid if rid else []
 
 def parse_paper_json(entity):
@@ -65,11 +72,8 @@ def parse_paper_json(entity):
   assert len(auid) == len(afid)
   return Paper(id, fid, cid, jid, auid, afid, rid)
 
-paper_attributes = ['Id', 'F.FId', 'C.CId', 'J.JId', 'AA.AuId', 'AA.AfId', 'RId']
-
-TYPE_UNKNOWN = 0
-TYPE_PAPER = 1
-TYPE_AUTHOR = 2
+PAPER_ATTR = ('Id', 'F.FId', 'C.CId', 'J.JId', 'AA.AuId', 'AA.AfId', 'RId')
+TYPE_UNKNOWN, TYPE_PAPER, TYPE_AUTHOR = 0, 1, 2
 
 def show_type(ty):
   if ty == TYPE_PAPER:
@@ -80,7 +84,7 @@ def show_type(ty):
 
 # get the type of one id, return a pair (TYPE_XXX, Paper object if TYPE_PAPER / AA.AuId if TYPE_AUTHOR)
 async def get_id_type(id):
-  resp = await send_http_request('OR(Id=%d,Composite(AA.AuId=%d))' % (id, id), count=1, attributes=paper_attributes+['Ti'])
+  resp = await send_http_request('OR(Id=%d,Composite(AA.AuId=%d))' % (id, id), count=1, attributes=PAPER_ATTR+('Ti',))
   if resp:
     entity = resp[0]
     return (TYPE_PAPER, parse_paper_json(entity)) if 'Ti' in entity else (TYPE_AUTHOR, id)
@@ -92,8 +96,9 @@ async def fetch_papers(paids):
   for paid in paids:
     tmp = 'Id=%d' % (paid)
     expr = 'OR(%s,%s)' % (expr, tmp) if expr else tmp
-  resp = await send_http_request(expr, count=len(paids), attributes=paper_attributes)
+  resp = await send_http_request(expr, count=len(paids), attributes=PAPER_ATTR)
   if len(resp) != len(paids):
+    logger.error('fetched incomplete paper list of %s' % (str(paids)))
     return None
   indices = {}
   for i in range(len(paids)):
@@ -105,12 +110,12 @@ async def fetch_papers(paids):
   return papers
 
 async def search_papers_by_rid(rid, count=default_count):
-  resp = await send_http_request('RId=%d' % (rid), count=count, attributes=paper_attributes)
+  resp = await send_http_request('RId=%d' % (rid), count=count, attributes=PAPER_ATTR)
   return list(map(parse_paper_json, resp))
 
 # fetch papermport times of one author
 async def search_papers_by_author(auid, count=default_count):
-  resp = await send_http_request('Composite(AA.AuId=%d)' % (auid), count=count, attributes=paper_attributes)
+  resp = await send_http_request('Composite(AA.AuId=%d)' % (auid), count=count, attributes=PAPER_ATTR)
   return list(map(parse_paper_json, resp))
 
 async def search_authors_by_affiliation(afid, count=default_count):
@@ -120,7 +125,7 @@ async def search_authors_by_affiliation(afid, count=default_count):
     auf_zip = list(filter(check, list(zip(auid_list, afid_list))))
     return [a for (a, b) in auf_zip]
 
-  resp = await send_http_request('Composite(AA.AfId=%d)' % (afid), count=count, attributes=paper_attributes)
+  resp = await send_http_request('Composite(AA.AfId=%d)' % (afid), count=count, attributes=PAPER_ATTR)
   papers = list(map(parse_paper_json, resp))
   authors = map(lambda p: filter_by_afid(p.auid, p.afid), papers)
   return list(reduce(get_union, authors, []))
@@ -191,7 +196,7 @@ async def solve_aa(auid1: int, auid2: int):
 
   async def solve_2hop(auid1, auid2):
     async def search_by_paper(count=default_count):
-      resp = await send_http_request('AND(Composite(AA.AuId=%d),Composite(AA.AuId=%d))' % (auid1, auid2), count=count, attributes=paper_attributes)
+      resp = await send_http_request('AND(Composite(AA.AuId=%d),Composite(AA.AuId=%d))' % (auid1, auid2), count=count, attributes=PAPER_ATTR)
       papers = list(map(parse_paper_json, resp))
       return list(map(lambda p: [auid1, p.id, auid2]), papers)
 
@@ -216,7 +221,7 @@ async def solve_ap(auid: int, paper: Paper):
 
   async def solve_2hop(auid, paper, count=default_count):
     # author -> ? (paper) -> paper
-    resp = await send_http_request('AND(Composite(AA.AuId=%d),RId=%d)' % (auid, paper.id), count=count, attributes=paper_attributes)
+    resp = await send_http_request('AND(Composite(AA.AuId=%d),RId=%d)' % (auid, paper.id), count=count, attributes=PAPER_ATTR)
     papers = list(map(parse_paper_json, resp))
     return list(map(lambda middle_paper: [auid, middle_paper.id, paper.id], papers))
 
@@ -309,8 +314,7 @@ async def worker(request):
     logger.warn('invalid request \'%s\'' % request.query_string)
     return web.json_response([])
   logger.info('accepting request with id1=%d id2=%d' % (id1, id2))
-  global start_time
-  start_time = time.time()
+  set_start_time()
   result = await solve(id1, id2)
   logger.info('%d->%d: elapsed_time=%f' % (id1, id2, get_elapsed_time()))
   logger.info('%d->%d: %d path(s) found, %s' % (len(result), id1, id2, str(result)))
