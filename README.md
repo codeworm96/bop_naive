@@ -2,7 +2,54 @@
 
 bop2016 naive
 
-you need at least python3.5 and package aiohttp to run.
+## Guide
+
+You need at least python3.5 and package aiohttp to run.
+
+## Possible paths
+
+### Paper -> Paper
+
+* Paper -> Paper
+
+* Paper -> Paper -> Paper
+* Paper -> Author -> Paper
+* Paper -> F/J/C -> Paper
+
+* Paper -> Paper -> Paper -> Paper
+* Paper -> Paper -> Author -> Paper
+* Paper -> Paper -> F/J/C -> Paper
+* Paper -> Author -> Paper -> Paper
+* Paper -> F/J/C -> Paper -> Paper
+
+
+### Paper -> Author
+
+* Paper -> Author
+* Paper -> Paper -> Author
+
+* Paper -> Paper -> Paper -> Author
+* Paper -> F/J/C -> Paper -> Author
+* Paper -> Author -> Paper -> Author
+* Paper -> Author -> Affiliation -> Author
+
+### Author -> Paper
+
+* Author -> Paper
+
+* Author -> Paper -> Paper
+
+* Author -> Affiliation -> Author -> Paper
+* Author -> Paper -> Paper -> Paper
+* Author -> Paper -> F/J/C -> Paper
+* Author -> Paper -> Author -> Paper
+
+### Author -> Author
+
+* Author -> Paper -> Author
+* Author -> Affiliation -> Author
+
+* Author -> Paper -> Paper -> Author
 
 ## Tests
 
