@@ -139,6 +139,11 @@ async def search_affiliations_by_author(auid, count=default_count):
   affiliations = list(map(lambda p: filter_by_auid(p.auid, p.afid), papers))
   return list(reduce(get_union, affiliations, []))
 
+# notes on pp_solver/pa_solver/ap_solver/aa_solver:
+# all solvers provide three static methods `solve_1hop`, `solve_2hop` and `solve`,
+# the first two do the same thing as its name stated, note that they are primitive up to asynchronous.
+# `solve` returns a list of futures (tasks) to be executed (asyncio.wait with timeout) by caller.
+# See pp_solver.solve for an example.
 class pp_solver(object):
   @staticmethod
   async def solve_1hop(paper1: Paper, paper2: Paper):
