@@ -7,8 +7,9 @@ from functools import reduce
 # TODO list:
 # 1. refactor solve_pp, solve_aa, solve_pa, solve_ap into different modules;
 # 2. split asynchronous IO operations into a suitable granularity, to get partial search results before time expired;
+# 3. kick off duplicate elements in output
 
-start_time = time.time() 
+start_time = 0
 logger = logging.getLogger(__name__)
 subscription_key = 'f7cc29509a8443c5b3a5e56b0e38b5a6'
 bop_url = 'https://oxfordhk.azure-api.net/academic/v1.0/evaluate'
@@ -20,6 +21,9 @@ def get_elapsed_time():
 
 def get_intersection(b1, b2):
   return list(set(b1).intersection(set(b2)))
+
+def get_union(b1, b2):
+  return list(set(b1) | set(b2))
 
 async def send_http_request(expr, count=None, attributes=None):
   params = {'expr': expr, 'subscription-key': subscription_key}
@@ -110,17 +114,27 @@ async def search_papers_by_author(auid, count=default_count):
   return list(map(parse_paper_json, resp))
 
 async def search_authors_by_affiliation(afid, count=default_count):
-  def filter_afid(auid_list, afid_list):
+  def filter_by_afid(auid_list, afid_list):
     def check(x):
-      au, af = x
-      return af == afid
+      return x[1] == afid
     auf_zip = list(filter(check, list(zip(auid_list, afid_list))))
     return [a for (a, b) in auf_zip]
 
   resp = await send_http_request('Composite(AA.AfId=%d)' % (afid), count=count, attributes=paper_attributes)
   papers = list(map(parse_paper_json, resp))
-  authors = map(lambda p: filter_afid(p.auid, p.afid), papers)
-  return list(reduce(lambda s1, s2: set(s1) | set(s2), authors))
+  authors = map(lambda p: filter_by_afid(p.auid, p.afid), papers)
+  return list(reduce(get_union, authors, []))
+
+async def search_affiliations_by_author(auid, count=default_count):
+  def filter_by_auid(auid_list, afid_list):
+    def check(x):
+      return x[0] == auid and x[1]
+    auf_zip = list(filter(check, list(zip(auid_list, afid_list))))
+    return [b for (a, b) in auf_zip]
+
+  papers = await search_papers_by_author(auid, count=count)
+  affiliations = list(map(lambda p: filter_by_auid(p.auid, p.afid), papers))
+  return list(reduce(get_union, affiliations, []))
 
 async def solve_pp(paper1: Paper, paper2: Paper):
   async def solve_1hop(paper1, paper2):
@@ -134,19 +148,19 @@ async def solve_pp(paper1: Paper, paper2: Paper):
       return list(map(lambda x: [paper1.id, x, paper2.id], intersection))
 
     paper2_ref = await search_papers_by_rid(paper2.id)
-    paper2_refids = map(lambda paper: paper.id, paper2_ref)
+    paper2_refids = map(lambda p: p.id, paper2_ref)
 
     fjoint = find(paper1.fid, paper2.fid)
     cjoint = find(paper1.cid, paper2.cid)
     jjoint = find(paper1.jid, paper2.jid)
     aujoint = find(paper1.auid, paper2.auid)
-    rjoint = list(map(lambda x: [paper1.id, x, paper2.id], get_intersection(paper1.rid, paper2_refids)))
+    rjoint = find(paper1.rid, paper2_refids)
     return fjoint + cjoint + jjoint + aujoint + rjoint
 
   # TODO: lower granularity
   hop12 = await solve_1hop(paper1, paper2) + await solve_2hop(paper1, paper2)
 
-  # TODO: the following codes are just wild codes to improve benchmarks, need refactoring
+  # FIXME: the following codes are just wild codes to improve benchmarks, need refactoring
   async def search_forward_reference(rid):
     papers = await fetch_papers([rid])
     if not papers:
@@ -161,13 +175,12 @@ async def solve_pp(paper1: Paper, paper2: Paper):
     result = await solve_2hop(paper1, papers[0])
     return list(map(lambda l: l + [paper2.id], result))
 
-  paper2_ref = await search_papers_by_rid(paper2.id)
-  paper2_refids = map(lambda paper: paper.id, paper2_ref) # TODO: duplicate query
+  paper2_refids = map(lambda p: p.id, await search_papers_by_rid(paper2.id)) # TODO: duplicate query
   tasks = list(map(search_forward_reference, paper1.rid))
   tasks += list(map(search_backward_reference, paper2_refids))
   if tasks:
     hop3_done, _ = await asyncio.wait(tasks, timeout=time_limit-get_elapsed_time())
-    hop3 = list(reduce(lambda l1, l2: l1+l2, map(lambda future: future.result(), hop3_done)))
+    hop3 = list(reduce(lambda l1, l2: l1+l2, map(lambda f: f.result(), hop3_done), []))
   else:
     hop3 = []
   return hop12 + hop3
@@ -180,11 +193,14 @@ async def solve_aa(auid1: int, auid2: int):
     async def search_by_paper(count=default_count):
       resp = await send_http_request('AND(Composite(AA.AuId=%d),Composite(AA.AuId=%d))' % (auid1, auid2), count=count, attributes=paper_attributes)
       papers = list(map(parse_paper_json, resp))
-      return list(map(lambda paper: [auid1, paper.id, auid2]), papers)
+      return list(map(lambda p: [auid1, p.id, auid2]), papers)
 
     async def search_by_affiliation(count=default_count):
       # TODO: really we can make it?
-      return []
+      aff1 = await search_affiliations_by_author(auid1)
+      aff2 = await search_affiliations_by_author(auid2)
+      intersection = get_intersection(aff1, aff2)
+      return list(map(lambda x: [auid1, x, auid2], intersection))
 
     path1, path2 = await asyncio.gather(search_by_paper(), search_by_affiliation())
     return path1 + path2
@@ -204,9 +220,53 @@ async def solve_ap(auid: int, paper: Paper):
     papers = list(map(parse_paper_json, resp))
     return list(map(lambda middle_paper: [auid, middle_paper.id, paper.id], papers))
 
-  # TODO: lower granularity
-  return await solve_1hop(auid, paper) + await solve_2hop(auid, paper)
+  # FIXME: the following codes are just wild codes to improve benchmarks, need refactoring
 
+  # TODO: lower granularity
+  hop12 = await solve_1hop(auid, paper) + await solve_2hop(auid, paper)
+  
+  async def search_forward_affiliation(afid):
+    authors = get_intersection(paper.auid, await search_authors_by_affiliation(afid))
+    return list(map(lambda a: [auid, afid, a, paper.id]), authors)
+
+  async def search_backward_reference(rid):
+    papers = await fetch_papers([rid])
+    if not papers:
+      return []
+    result = await solve_2hop(auid, papers[0])
+    return list(map(lambda l: l + [paper.id], result))
+  
+  async def search_forward_paper(paper1, paper2):
+    # TODO: duplicate of solve_pp::solve_2hop, needs refactoring
+    def find(list1, list2):
+      intersection = get_intersection(list1, list2)
+      return list(map(lambda x: [paper1.id, x, paper2.id], intersection))
+
+    paper2_ref = await search_papers_by_rid(paper2.id)
+    paper2_refids = map(lambda p: p.id, paper2_ref)
+
+    fjoint = find(paper1.fid, paper2.fid)
+    cjoint = find(paper1.cid, paper2.cid)
+    jjoint = find(paper1.jid, paper2.jid)
+    aujoint = find(paper1.auid, paper2.auid)
+    rjoint = find(paper1.rid, paper2_refids)
+    
+    result = fjoint + cjoint + jjoint + aujoint + rjoint
+    return list(map(lambda l: [auid]+l, result))
+
+  author_papers = await search_papers_by_author(auid)
+  affiliations = await search_affiliations_by_author(auid)
+  paper_refids = map(lambda p: p.id, await search_papers_by_rid(paper.id))
+  tasks = list(map(search_forward_affiliation, affiliations)) # author->affiliation->author->paper
+  tasks += list(map(search_backward_reference, paper_refids)) # author->?->paper->paper
+  tasks += list(map(lambda p: search_forward_paper(p, paper), author_papers)) # author->paper->?->paper
+  if tasks:
+    hop3_done, _ = await asyncio.wait(tasks, timeout=time_limit-get_elapsed_time())
+    hop3 = list(reduce(lambda l1, l2: l1+l2, map(lambda f: f.result(), hop3_done), []))
+  else:
+    hop3 = []
+  return hop12 + hop3 # TODO: unique
+  
 async def solve_pa(paper: Paper, auid: int):
   async def solve_1hop(paper, auid):
     if auid in paper.auid:
@@ -249,7 +309,10 @@ async def worker(request):
     logger.warn('invalid request \'%s\'' % request.query_string)
     return web.json_response([])
   logger.info('accepting request with id1=%d id2=%d' % (id1, id2))
+  global start_time
+  start_time = time.time()
   result = await solve(id1, id2)
+  logger.info('%d->%d: elapsed_time=%f' % (id1, id2, get_elapsed_time()))
   logger.info('%d->%d: %d path(s) found, %s' % (len(result), id1, id2, str(result)))
   return web.json_response(result)
 
