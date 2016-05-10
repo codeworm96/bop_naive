@@ -154,7 +154,6 @@ class pp_solver(object):
 
     if not paper2_refids:
       paper2_refids = map(lambda p: p.id, await search_papers_by_ref(paper2.id))
-
     return reduce(lambda a, b: a + b, [find_joint(paper1.fid, paper2.fid),
       find_joint(paper1.cid, paper2.cid),
       find_joint(paper1.jid, paper2.jid),
@@ -218,10 +217,9 @@ class ap_solver(object):
 
   @staticmethod
   async def solve_2hop(auid: int, paper: Paper, count=default_count):
-    # author -> paper -> paper
     resp = await send_http_request('AND(Composite(AA.AuId=%d),RId=%d)' % (auid, paper.id), count=count, attributes=PAPER_ATTR)
     papers = list(map(parse_paper_json, resp))
-    return list(map(lambda middle_paper: [auid, middle_paper.id, paper.id], papers))
+    return list(map(lambda mp: [auid, mp.id, paper.id], papers))
 
   @staticmethod
   async def solve(auid: int, paper: Paper):
@@ -229,12 +227,12 @@ class ap_solver(object):
       authors = get_intersection(paper.auid, await search_authors_by_affiliation(afid))
       return list(map(lambda a: [auid, afid, a, paper.id]), authors)
 
-    async def search_backward_reference(rid):
-      papers = await fetch_papers([rid])
-      if not papers:
-        return []
-      result = await ap_solver.solve_2hop(auid, papers[0])
-      return list(map(lambda l: l + [paper.id], result))
+    # async def search_backward_reference(rid):
+      # papers = await fetch_papers([rid])
+      # if not papers:
+        # return []
+      # result = await ap_solver.solve_2hop(auid, papers[0])
+      # return list(map(lambda l: l + [paper.id], result))
 
     async def search_forward_paper(paper1, paper2):
       ways = await pp_solver.solve_2hop(paper1, paper2)
@@ -243,12 +241,13 @@ class ap_solver(object):
     tasks = [ap_solver.solve_1hop(auid, paper), ap_solver.solve_2hop(auid, paper)]
 
     # TODO: gather those three asynchronous IO actions
+    # TODO: search_papers_by_author/search_affiliations_by_author do the same HTTP query, merged?
     author_papers = await search_papers_by_author(auid)
     affiliations = await search_affiliations_by_author(auid)
-    paper_refids = map(lambda p: p.id, await search_papers_by_ref(paper.id))
+    # paper_refids = map(lambda p: p.id, await search_papers_by_ref(paper.id))
 
     tasks += list(map(search_forward_affiliation, affiliations)) # author->affiliation->author->paper
-    tasks += list(map(search_backward_reference, paper_refids)) # author->?->paper->paper FIXME FIXME FIXME
+    # tasks += list(map(search_backward_reference, paper_refids)) # author->?->paper->paper
     tasks += list(map(lambda p: search_forward_paper(p, paper), author_papers)) # author->paper->?->paper
     return tasks
 

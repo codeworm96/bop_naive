@@ -22,7 +22,6 @@ You need at least python3.5 and package aiohttp to run.
 * Paper -> Author -> Paper -> Paper
 * Paper -> F/J/C -> Paper -> Paper
 
-
 ### Paper -> Author
 
 * Paper -> Author
