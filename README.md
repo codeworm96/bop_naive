@@ -8,9 +8,9 @@ you need at least python3.5 and package aiohttp to run.
 
 ### Number pairs
 
-* 2251253715 2180737804
-* 2147152072 189831743
-* 2332023333 2310280492
+* 2251253715 2180737804 (author -> paper)
+* 2147152072 189831743 (paper -> paper)
+* 2332023333 2310280492 (paper -> paper)
 
 ### URLs
 

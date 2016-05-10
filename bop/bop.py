@@ -7,7 +7,6 @@ from functools import reduce
 # TODO list:
 # 1. refactor solve_pp, solve_aa, solve_pa, solve_ap into different modules;
 # 2. split asynchronous IO operations into a suitable granularity, to get partial search results before time expired;
-# 3. comprehensive logger.
 
 start_time = time.time() 
 logger = logging.getLogger(__name__)
@@ -30,8 +29,9 @@ async def send_http_request(expr, count=None, attributes=None):
     params['attributes'] = ','.join(attributes)
   with aiohttp.ClientSession() as session:
     async with session.get(bop_url, params=params) as resp:
-      logger.info('sending HTTP request %s' % resp.url)
-      return await resp.json()
+      logger.info('sending HTTP request: %s' % resp.url)
+      json = await resp.json()
+      return json['entities']
 
 class Paper(object):
   def __init__(self, id, fid, cid, jid, auid, afid, rid):
@@ -41,21 +41,21 @@ class Paper(object):
     self.cid = cid if cid else []
     self.jid = jid if jid else []
     self.auid = auid if auid else []
-    self.afid = afid if afid else []
+    self.afid = afid if afid else [] # afid can be None if not available
     self.rid = rid if rid else []
 
 def parse_paper_json(entity):
   id, fid, cid, jid, auid, rid = 0, None, None, None, None, None
   id = entity['Id']
   if 'F' in entity:
-    fid = list(map(lambda d: d['FId'], entity['F']))
+    fid = [d['FId'] for d in entity['F']]
   if 'C' in entity:
     cid = [entity['C']['CId']]
   if 'J' in entity:
     jid = [entity['J']['JId']]
   if 'AA' in entity:
-    auid = list(map(lambda d: d['AuId'], entity['AA']))
-    afid = list(map(lambda d: d['AfId'] if 'AfId' in d else None, entity['AA']))
+    auid = [d['AuId'] for d in entity['AA']]
+    afid = [d['AfId'] if 'AfId' in d else None for d in entity['AA']]
   if 'RId' in entity:
     rid = entity['RId']
   assert len(auid) == len(afid)
@@ -77,9 +77,8 @@ def show_type(ty):
 # get the type of one id, return a pair (TYPE_XXX, Paper object if TYPE_PAPER / AA.AuId if TYPE_AUTHOR)
 async def get_id_type(id):
   resp = await send_http_request('OR(Id=%d,Composite(AA.AuId=%d))' % (id, id), count=1, attributes=paper_attributes+['Ti'])
-  entities = resp['entities']
-  if entities:
-    entity = entities[0]
+  if resp:
+    entity = resp[0]
     return (TYPE_PAPER, parse_paper_json(entity)) if 'Ti' in entity else (TYPE_AUTHOR, id)
   return (TYPE_UNKNOWN, None)
 
@@ -90,26 +89,25 @@ async def fetch_papers(paids):
     tmp = 'Id=%d' % (paid)
     expr = 'OR(%s,%s)' % (expr, tmp) if expr else tmp
   resp = await send_http_request(expr, count=len(paids), attributes=paper_attributes)
-  entities = resp['entities']
-  if len(entities) != len(paids):
+  if len(resp) != len(paids):
     return None
   indices = {}
   for i in range(len(paids)):
     indices[paids[i]] = i
   papers = [None] * len(paids)
-  for entity in entities:
+  for entity in resp:
     paper = parse_paper_json(entity)
     papers[indices[paper.id]] = paper
   return papers
 
 async def search_papers_by_rid(rid, count=default_count):
   resp = await send_http_request('RId=%d' % (rid), count=count, attributes=paper_attributes)
-  return list(map(parse_paper_json, resp['entities']))
+  return list(map(parse_paper_json, resp))
 
 # fetch papermport times of one author
 async def search_papers_by_author(auid, count=default_count):
   resp = await send_http_request('Composite(AA.AuId=%d)' % (auid), count=count, attributes=paper_attributes)
-  return list(map(parse_paper_json, resp['entities']))
+  return list(map(parse_paper_json, resp))
 
 async def search_authors_by_affiliation(afid, count=default_count):
   def filter_afid(auid_list, afid_list):
@@ -120,7 +118,7 @@ async def search_authors_by_affiliation(afid, count=default_count):
     return [a for (a, b) in auf_zip]
 
   resp = await send_http_request('Composite(AA.AfId=%d)' % (afid), count=count, attributes=paper_attributes)
-  papers = list(map(lambda e: parse_paper_json(e), resp['entities']))
+  papers = list(map(parse_paper_json, resp))
   authors = map(lambda p: filter_afid(p.auid, p.afid), papers)
   return list(reduce(lambda s1, s2: set(s1) | set(s2), authors))
 
@@ -165,8 +163,8 @@ async def solve_pp(paper1: Paper, paper2: Paper):
 
   paper2_ref = await search_papers_by_rid(paper2.id)
   paper2_refids = map(lambda paper: paper.id, paper2_ref) # TODO: duplicate query
-  tasks = list(map(lambda ref: search_forward_reference(ref), paper1.rid))
-  tasks += list(map(lambda ref: search_backward_reference(ref), paper2_refids))
+  tasks = list(map(search_forward_reference, paper1.rid))
+  tasks += list(map(search_backward_reference, paper2_refids))
   if tasks:
     hop3_done, _ = await asyncio.wait(tasks, timeout=time_limit-get_elapsed_time())
     hop3 = list(reduce(lambda l1, l2: l1+l2, map(lambda future: future.result(), hop3_done)))
@@ -181,7 +179,7 @@ async def solve_aa(auid1: int, auid2: int):
   async def solve_2hop(auid1, auid2):
     async def search_by_paper(count=default_count):
       resp = await send_http_request('AND(Composite(AA.AuId=%d),Composite(AA.AuId=%d))' % (auid1, auid2), count=count, attributes=paper_attributes)
-      papers = list(map(parse_paper_json, resp['entities']))
+      papers = list(map(parse_paper_json, resp))
       return list(map(lambda paper: [auid1, paper.id, auid2]), papers)
 
     async def search_by_affiliation(count=default_count):
@@ -203,7 +201,7 @@ async def solve_ap(auid: int, paper: Paper):
   async def solve_2hop(auid, paper, count=default_count):
     # author -> ? (paper) -> paper
     resp = await send_http_request('AND(Composite(AA.AuId=%d),RId=%d)' % (auid, paper.id), count=count, attributes=paper_attributes)
-    papers = list(map(parse_paper_json, resp['entities']))
+    papers = list(map(parse_paper_json, resp))
     return list(map(lambda middle_paper: [auid, middle_paper.id, paper.id], papers))
 
   # TODO: lower granularity
@@ -217,15 +215,16 @@ async def solve_pa(paper: Paper, auid: int):
 
   async def solve_2hop(paper, auid):
     # paper -> ? (paper) -> author
-    papers = await search_papers_by_author(auid)
-    return [[paper.id, middle_paper.id, auid] for middle_paper in papers if middle_paper.id in paper.rid]
+    rid_set = set(paper.rid)
+    papers = filter(lambda p: p.id in rid_set, await search_papers_by_author(auid))
+    return list(map(lambda middle_paper: [paper.id, middle_paper.id, auid], papers))
 
   # TODO: lower granularity
   return await solve_1hop(paper, auid) + await solve_2hop(paper, auid)
 
 async def solve(id1, id2):
   (type1, obj1), (type2, obj2) = await asyncio.gather(get_id_type(id1), get_id_type(id2))
-  logger.info('solving test (%d,%s), (%d,%s)' % (id1, show_type(type1), id2, show_type(type2)))
+  logger.info('solving test (%d,%s),(%d,%s)' % (id1, show_type(type1), id2, show_type(type2)))
   if type1 == TYPE_PAPER and type2 == TYPE_PAPER:
     assert obj1.id == id1 and obj2.id == id2
     return await solve_pp(obj1, obj2)
@@ -237,9 +236,9 @@ async def solve(id1, id2):
     return await solve_pa(obj1, obj2)
   else:
     if type1 == TYPE_UNKNOWN:
-      logger.warn('type-unknown found, id=%d' % id1)
+      logger.warn('type-unknown found id=%d' % id1)
     if type2 == TYPE_UNKNOWN:
-      logger.warn('type-unknown found, id=%d' % id2)
+      logger.warn('type-unknown found id=%d' % id2)
     return []
 
 async def worker(request):
@@ -251,7 +250,7 @@ async def worker(request):
     return web.json_response([])
   logger.info('accepting request with id1=%d id2=%d' % (id1, id2))
   result = await solve(id1, id2)
-  logger.info('%d -> %d: %s' % (id1, id2, str(result)))
+  logger.info('%d->%d: %d path(s) found, %s' % (len(result), id1, id2, str(result)))
   return web.json_response(result)
 
 if __name__ == '__main__':
@@ -284,6 +283,6 @@ if __name__ == '__main__':
   app = web.Application()
   app.router.add_route('GET', '/bop', worker)
 
-  logger.info('bop server started')
+  logger.info('bop server has started, listening on port %d' % (port))
 
   web.run_app(app, port=port)
