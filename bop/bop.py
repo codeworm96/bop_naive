@@ -7,6 +7,7 @@ from functools import reduce
 start_time = 0
 logger = logging.getLogger(__name__)
 default_count = 1000
+client_session = None
 time_limit = 300 # TODO: 300 is not a suitable value, see how score is evaluated
 
 def set_start_time():
@@ -34,15 +35,14 @@ async def send_http_request(expr, count=None, attributes=None):
     params['count'] = count
   if attributes:
     params['attributes'] = ','.join(attributes)
-  with aiohttp.ClientSession() as session:
-    async with session.get(bop_url, params=params) as resp:
-      # logger.info('sending HTTP request: %s' % resp.url)
-      json = await resp.json()
-      if 'entities' in json:
-        return json['entities']
-      else:
-        logger.error('invalid response from server')
-        return []
+  async with client_session.get(bop_url, params=params) as resp:
+    # logger.info('sending HTTP request: %s' % resp.url)
+    json = await resp.json()
+    if 'entities' in json:
+      return json['entities']
+    else:
+      logger.error('invalid response from server')
+      return []
 
 class Paper(object):
   def __init__(self, id, fid, cid, jid, auid, afid, rid):
@@ -72,7 +72,7 @@ def parse_paper_json(entity):
     rid = entity['RId']
   return Paper(id, fid, cid, jid, auid, afid, rid)
 
-TYPE_UNKNOWN, TYPE_PAPER, TYPE_AUTHOR = 0, 1, 2
+TYPE_PAPER, TYPE_AUTHOR = 1, 2
 
 def show_type(ty):
   if ty == TYPE_PAPER:
@@ -82,12 +82,25 @@ def show_type(ty):
   return 'type-unknown'
 
 # get the type of one id, return a pair (TYPE_XXX, Paper object if TYPE_PAPER / AA.AuId if TYPE_AUTHOR)
-async def get_id_type(id):
-  resp = await send_http_request('OR(Id=%d,Composite(AA.AuId=%d))' % (id, id), count=1, attributes=('Id','F.FId','C.CId','J.JId','AA.AuId','AA.AfId','RId','Ti'))
-  if resp:
+async def get_id_type(id1, id2):
+  resp = await send_http_request('OR(Id=%d,Id=%d)' % (id1, id2), count=2, attributes=('Id','F.FId','C.CId','J.JId','AA.AuId','AA.AfId','RId','Ti'))
+  if len(resp) == 2:
+    entity1, entity2 = resp
+    if entity1['Id'] != id1:
+      entity1, entity2 = entity2, entity1
+    ty1 = (TYPE_PAPER, parse_paper_json(entity1)) if 'Ti' in entity1 else (TYPE_AUTHOR, id1)
+    ty2 = (TYPE_PAPER, parse_paper_json(entity2)) if 'Ti' in entity2 else (TYPE_AUTHOR, id2)
+    return ty1, ty2
+  if len(resp) == 1:
     entity = resp[0]
-    return (TYPE_PAPER, parse_paper_json(entity)) if 'Ti' in entity else (TYPE_AUTHOR, id)
-  return (TYPE_UNKNOWN, None)
+    ty1 = (TYPE_AUTHOR, id1)
+    ty2 = (TYPE_AUTHOR, id2)
+    if entity['Id'] == id1:
+      ty1 = (TYPE_PAPER, parse_paper_json(entity))
+    else:
+      ty2 = (TYPE_PAPER, parse_paper_json(entity))
+    return ty1, ty2
+  return (TYPE_AUTHOR, id1), (TYPE_AUTHOR, id2)
 
 # fetch information of papers, paids shall have a reasonable length to avoid HTTP error 'Request URL Too Long'
 async def fetch_papers(paids):
@@ -237,6 +250,7 @@ class aa_solver(object):
     # papers2 = await search_papers_by_author(auid2)
     # tasks  = [aa_solver.solve_1hop(auid1, auid2), aa_solver.solve_2hop(auid1, auid2)]
     # tasks += list(map(search_backward_paper, papers2))
+    # return tasks
 
     async def search_bidirection_papers(auid1, auid2):
       paper_list1, paper_list2 = await asyncio.gather(search_papers_by_author(auid1), search_papers_by_author(auid2))
@@ -267,7 +281,7 @@ class ap_solver(object):
   async def solve(auid, paper):
     async def search_forward_affiliation(afid):
       authors = get_intersection(paper.auid, await search_authors_by_affiliation(afid))
-      return list(map(lambda a: (auid, afid, a, paper.id)), authors)
+      return list(map(lambda a: (auid, afid, a, paper.id), authors))
 
     async def search_forward_paper(paper1, paper2):
       ways = await pp_solver.solve_2hop(paper1, paper2)
@@ -275,10 +289,10 @@ class ap_solver(object):
 
     tasks = [ap_solver.solve_1hop(auid, paper), ap_solver.solve_2hop(auid, paper)]
 
-    author_papers, affiliations = await search_papers_and_affiliations_by_author(auid)
+    apapers, affiliations = await search_papers_and_affiliations_by_author(auid)
 
     tasks += list(map(search_forward_affiliation, affiliations)) # author->affiliation->author->paper
-    tasks += list(map(lambda p: search_forward_paper(p, paper), author_papers)) # author->paper->?->paper
+    tasks += list(map(lambda p: search_forward_paper(p, paper), apapers)) # author->paper->?->paper
     return tasks
 
 class pa_solver(object):
@@ -305,14 +319,14 @@ class pa_solver(object):
       ok_authors = get_intersection(paper.auid, authors)
       return list(map(lambda a: (paper.id, a, afid, auid), ok_authors))
 
-    apapers, affiliations = await asyncio.gather(search_papers_by_author(auid), search_affiliations_by_author(auid))
+    apapers, affiliations = await search_papers_and_affiliations_by_author(auid)
     tasks  = [pa_solver.solve_1hop(paper, auid), pa_solver.solve_2hop(paper, auid, apapers)]
     tasks += list(map(search_backward_paper, apapers))
     tasks += list(map(search_backward_affiliation, affiliations))
     return tasks
 
 async def solve(id1, id2):
-  (type1, obj1), (type2, obj2) = await asyncio.gather(get_id_type(id1), get_id_type(id2))
+  (type1, obj1), (type2, obj2) = await get_id_type(id1, id2)
   logger.info('solving test (%d,%s),(%d,%s)' % (id1, show_type(type1), id2, show_type(type2)))
   fs = None
   if type1 == TYPE_PAPER and type2 == TYPE_PAPER:
@@ -325,10 +339,7 @@ async def solve(id1, id2):
   elif type1 == TYPE_PAPER and type2 == TYPE_AUTHOR:
     fs = await pa_solver.solve(obj1, obj2)
   else:
-    if type1 == TYPE_UNKNOWN:
-      logger.warn('type-unknown found id=%d' % id1)
-    if type2 == TYPE_UNKNOWN:
-      logger.warn('type-unknown found id=%d' % id2)
+    logger.error('type-unknown found id=%d,%d' % (id1, id2))
     return []
   done, _ = await asyncio.wait(fs, timeout=time_limit-get_elapsed_time())
   return make_unique(list(reduce(lambda l1, l2: l1+l2, map(lambda f: f.result(), done), [])))
@@ -343,7 +354,9 @@ async def worker(request):
     return web.json_response([])
   logger.info('accepting request with id1=%d id2=%d' % (id1, id2))
   set_start_time()
-  result = await solve(id1, id2)
+  global client_session
+  with aiohttp.ClientSession() as client_session:
+    result = await solve(id1, id2)
   logger.info('%d->%d: elapsed_time=%f' % (id1, id2, get_elapsed_time()))
   logger.info('%d->%d: %d path(s) found, %s' % (id1, id2, len(result), str(result)))
   return web.json_response(result)
