@@ -1,3 +1,4 @@
+from typing import Union
 import asyncio, aiohttp
 import logging, time
 from aiohttp import web
@@ -128,11 +129,11 @@ async def search_authors_by_affiliation(afid, count=default_count):
 
   resp = await send_http_request('Composite(AA.AfId=%d)' % (afid), count=count, attributes=PAPER_ATTR)
   papers = list(map(parse_paper_json, resp))
-  authors = map(lambda p: filter_by_afid(p.auid, p.afid), papers)
+  authors = list(map(lambda p: filter_by_afid(p.auid, p.afid), papers))
   return list(reduce(get_union, authors, []))
 
-# search affiliations which the author attaches to
-async def search_affiliations_by_author(auid, count=default_count):
+# search papers and affiliations which the author attaches to
+async def search_papers_and_affiliations_by_author(auid, count=default_count):
   def filter_by_auid(auid_list, afid_list):
     def check(x):
       return x[0] == auid and x[1]
@@ -141,7 +142,12 @@ async def search_affiliations_by_author(auid, count=default_count):
 
   papers = await search_papers_by_author(auid, count=count)
   affiliations = list(map(lambda p: filter_by_auid(p.auid, p.afid), papers))
-  return list(reduce(get_union, affiliations, []))
+  return papers, list(reduce(get_union, affiliations, []))
+
+# search affiliations which the author attaches to
+async def search_affiliations_by_author(auid, count=default_count):
+  _, affiliations = await search_papers_and_affiliations_by_author(auid, count)
+  return affiliations
 
 # notes on pp_solver/pa_solver/ap_solver/aa_solver:
 # all solvers provide three static methods `solve_1hop`, `solve_2hop` and `solve`,
@@ -156,13 +162,26 @@ class pp_solver(object):
     return []
 
   @staticmethod
-  async def solve_2hop(paper1: Paper, paper2: Paper, paper2_refids=None):
+  async def solve_2hop(paper1: Union[Paper,int], paper2: Paper, paper2_refids=None):
     def find_joint(list1, list2):
       intersection = get_intersection(list1, list2)
       return list(map(lambda x: (paper1.id, x, paper2.id), intersection))
 
-    if paper2_refids == None:
-      paper2_refids = map(lambda p: p.id, await search_papers_by_ref(paper2.id))
+    if paper2_refids == None and isinstance(paper1, int):
+      paper2_refs, paper1 = await asyncio.gather(search_papers_by_ref(paper2.id), fetch_papers([paper1]))
+      paper2_refids = list(map(lambda p: p.id, paper2_refs))
+      if not paper1:
+        return []
+      else:
+        paper1 = paper1[0]
+    elif paper2_refids == None:
+      paper2_refids = list(map(lambda p: p.id, await search_papers_by_ref(paper2.id)))
+    elif isinstance(paper1, int):
+      paper1 = await fetch_papers([paper1])
+      if not paper1:
+        return []
+      else:
+        paper1 = paper1[0]
     return list(reduce(lambda a, b: a + b, [find_joint(paper1.fid, paper2.fid),
       find_joint(paper1.cid, paper2.cid),
       find_joint(paper1.jid, paper2.jid),
@@ -172,10 +191,7 @@ class pp_solver(object):
   @staticmethod
   async def solve(paper1: Paper, paper2: Paper):
     async def search_forward_reference(rid):
-      papers = await fetch_papers([rid])
-      if not papers:
-        return []
-      result = await pp_solver.solve_2hop(papers[0], paper2)
+      result = await pp_solver.solve_2hop(rid, paper2)
       return list(map(lambda l: (paper1.id,) + l, result))
 
     async def search_backward_reference(ref_paper):
@@ -183,9 +199,9 @@ class pp_solver(object):
       return list(map(lambda l: l + (paper2.id,), result))
 
     paper2_refs = await search_papers_by_ref(paper2.id)
-    paper2_refids = map(lambda p: p.id, paper2_refs)
+    paper2_refids = list(map(lambda p: p.id, paper2_refs))
 
-    tasks  = [pp_solver.solve_1hop(paper1, paper2), pp_solver.solve_2hop(paper1, paper2, paper2_refids)] 
+    tasks  = [pp_solver.solve_1hop(paper1, paper2), pp_solver.solve_2hop(paper1, paper2, paper2_refids)]
     tasks += list(map(search_forward_reference, paper1.rid))
     tasks += list(map(search_backward_reference, paper2_refs))
     return tasks
@@ -213,6 +229,7 @@ class aa_solver(object):
 
   @staticmethod
   async def solve(auid1: int, auid2: int):
+    # TODO: exists another method to solve author->paper->paper->author but requires more local computing
     async def search_backward_paper(paper):
       ways = await ap_solver.solve_2hop(auid1, paper)
       return list(map(lambda l: l+(auid2,), ways))
@@ -247,8 +264,7 @@ class ap_solver(object):
 
     tasks = [ap_solver.solve_1hop(auid, paper), ap_solver.solve_2hop(auid, paper)]
 
-    # TODO: search_papers_by_author/search_affiliations_by_author do the same HTTP query, merged?
-    author_papers, affiliations = await asyncio.gather(search_papers_by_author(auid), search_affiliations_by_author(auid))
+    author_papers, affiliations = await search_papers_and_affiliations_by_author(auid)
 
     tasks += list(map(search_forward_affiliation, affiliations)) # author->affiliation->author->paper
     tasks += list(map(lambda p: search_forward_paper(p, paper), author_papers)) # author->paper->?->paper
@@ -303,7 +319,6 @@ async def solve(id1, id2):
     if type2 == TYPE_UNKNOWN:
       logger.warn('type-unknown found id=%d' % id2)
     return []
-
   done, _ = await asyncio.wait(fs, timeout=time_limit-get_elapsed_time())
   return make_unique(list(reduce(lambda l1, l2: l1+l2, map(lambda f: f.result(), done), [])))
 
@@ -336,18 +351,6 @@ if __name__ == '__main__':
       format='[%(asctime)s] [%(name)-12s] [%(levelname)-8s] %(message)s',
       datefmt='%m-%d %H:%M:%S',
       level=logging.DEBUG)
-
-  ### begin DEBUG section ###
-  async def debug_f():
-    # await fetch_papers([2166559705, 2002089154, 1679644680, 2243171526, 1632114991, 2158864412, 1597161471, 1515932031, 1558832481, 2138709157, 2100406636, 1833785989, 1520890006, 1545155892, 1578959085, 1597561788, 2160293203])
-    await search_authors_by_affiliation(79576946)
-  debug = False
-  if debug:
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(debug_f())
-    loop.close()
-    exit(0)
-  ### end DEBUG section ###
 
   app = web.Application()
   app.router.add_route('GET', '/bop', worker)
