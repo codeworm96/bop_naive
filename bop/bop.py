@@ -196,7 +196,7 @@ class aa_solver(object):
     async def search_by_paper(count=default_count):
       resp = await send_http_request('AND(Composite(AA.AuId=%d),Composite(AA.AuId=%d))' % (auid1, auid2), count=count, attributes=PAPER_ATTR)
       papers = list(map(parse_paper_json, resp))
-      return list(map(lambda p: (auid1, p.id, auid2)), papers)
+      return list(map(lambda p: (auid1, p.id, auid2), papers))
 
     async def search_by_affiliation(count=default_count):
       aff1 = await search_affiliations_by_author(auid1)
