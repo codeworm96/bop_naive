@@ -1,4 +1,3 @@
-from typing import Union
 import asyncio, aiohttp
 import logging, time
 from aiohttp import web
@@ -21,7 +20,7 @@ def get_intersection(b1, b2):
   return list(set(b1).intersection(set(b2)))
 
 def get_union(b1, b2):
-  return list(set(b1) | set(b2))
+  return list(set(b1).union(set(b2)))
 
 def make_unique(l):
   return list(set(l))
@@ -69,7 +68,6 @@ def parse_paper_json(entity):
     afid = [d['AfId'] if 'AfId' in d else None for d in entity['AA']]
   if 'RId' in entity:
     rid = entity['RId']
-  assert len(auid) == len(afid)
   return Paper(id, fid, cid, jid, auid, afid, rid)
 
 PAPER_ATTR = ('Id', 'F.FId', 'C.CId', 'J.JId', 'AA.AuId', 'AA.AfId', 'RId')
@@ -156,13 +154,13 @@ async def search_affiliations_by_author(auid, count=default_count):
 # See pp_solver.solve for an example.
 class pp_solver(object):
   @staticmethod
-  async def solve_1hop(paper1: Paper, paper2: Paper):
+  async def solve_1hop(paper1, paper2):
     if paper2.id in paper1.rid:
       return [(paper1.id, paper2.id)]
     return []
 
   @staticmethod
-  async def solve_2hop(paper1: Union[Paper,int], paper2: Paper, paper2_refids=None):
+  async def solve_2hop(paper1, paper2, paper2_refids=None):
     def find_joint(list1, list2):
       intersection = get_intersection(list1, list2)
       return list(map(lambda x: (paper1.id, x, paper2.id), intersection))
@@ -189,7 +187,7 @@ class pp_solver(object):
       find_joint(paper1.rid, paper2_refids)]))
 
   @staticmethod
-  async def solve(paper1: Paper, paper2: Paper):
+  async def solve(paper1, paper2):
     async def search_forward_reference(rid):
       result = await pp_solver.solve_2hop(rid, paper2)
       return list(map(lambda l: (paper1.id,) + l, result))
@@ -208,11 +206,11 @@ class pp_solver(object):
 
 class aa_solver(object):
   @staticmethod
-  async def solve_1hop(auid1: int, auid2: int):
+  async def solve_1hop(auid1, auid2):
     return [] # don't be confused, indeed there is no possible path lol
 
   @staticmethod
-  async def solve_2hop(auid1: int, auid2: int):
+  async def solve_2hop(auid1, auid2):
     async def search_by_paper(count=default_count):
       resp = await send_http_request('AND(Composite(AA.AuId=%d),Composite(AA.AuId=%d))' % (auid1, auid2), count=count, attributes=PAPER_ATTR)
       papers = list(map(parse_paper_json, resp))
@@ -228,7 +226,7 @@ class aa_solver(object):
     return way1 + way2
 
   @staticmethod
-  async def solve(auid1: int, auid2: int):
+  async def solve(auid1, auid2):
     # TODO: exists another method to solve author->paper->paper->author but requires more local computing
     async def search_backward_paper(paper):
       ways = await ap_solver.solve_2hop(auid1, paper)
@@ -241,19 +239,19 @@ class aa_solver(object):
 
 class ap_solver(object):
   @staticmethod
-  async def solve_1hop(auid: int, paper: Paper):
+  async def solve_1hop(auid, paper):
     if auid in paper.auid:
       return [(auid, paper.id)]
     return []
 
   @staticmethod
-  async def solve_2hop(auid: int, paper: Paper, count=default_count):
+  async def solve_2hop(auid, paper, count=default_count):
     resp = await send_http_request('AND(Composite(AA.AuId=%d),RId=%d)' % (auid, paper.id), count=count, attributes=PAPER_ATTR)
     papers = list(map(parse_paper_json, resp))
     return list(map(lambda mp: (auid, mp.id, paper.id), papers))
 
   @staticmethod
-  async def solve(auid: int, paper: Paper):
+  async def solve(auid, paper):
     async def search_forward_affiliation(afid):
       authors = get_intersection(paper.auid, await search_authors_by_affiliation(afid))
       return list(map(lambda a: (auid, afid, a, paper.id)), authors)
@@ -272,11 +270,11 @@ class ap_solver(object):
 
 class pa_solver(object):
   @staticmethod
-  async def solve_1hop(paper: Paper, auid: int):
+  async def solve_1hop(paper, auid):
     return [(paper.id, auid)] if auid in paper.auid else []
 
   @staticmethod
-  async def solve_2hop(paper: Paper, auid: int, apapers=None):
+  async def solve_2hop(paper, auid, apapers=None):
     rid_set = set(paper.rid)
     if apapers == None:
       apapers = await search_papers_by_author(auid)
@@ -284,7 +282,7 @@ class pa_solver(object):
     return list(map(lambda mp: (paper.id, mp.id, auid), ok_papers))
 
   @staticmethod
-  async def solve(paper: Paper, auid: int):
+  async def solve(paper, auid):
     async def search_backward_paper(paper2):
       ways = await pp_solver.solve_2hop(paper, paper2)
       return list(map(lambda l: l + (auid,), ways))
