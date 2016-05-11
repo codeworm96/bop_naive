@@ -137,7 +137,7 @@ async def search_authors_by_affiliation(afid, count=default_count):
   def filter_by_afid(auid_list, afid_list):
     def check(x):
       return x[1] == afid
-    auf_zip = list(filter(check, list(zip(auid_list, afid_list))))
+    auf_zip = list(filter(check, zip(auid_list, afid_list)))
     return [a for (a, b) in auf_zip]
 
   resp = await send_http_request('Composite(AA.AfId=%d)' % (afid), count=count, attributes=('Id','AA.AuId','AA.AfId'))
@@ -170,13 +170,11 @@ async def search_affiliations_by_author(auid, count=default_count):
 class pp_solver(object):
   @staticmethod
   async def solve_1hop(paper1, paper2):
-    if paper2.id in paper1.rid:
-      return [(paper1.id, paper2.id)]
-    return []
+    return [(paper1.id, paper2.id)] if paper2.id in paper1.rid else []
 
   @staticmethod
   async def solve_2hop(paper1, paper2, paper2_refids=None):
-    def find_joint(list1, list2):
+    def find_way(list1, list2):
       intersection = get_intersection(list1, list2)
       return list(map(lambda x: (paper1.id, x, paper2.id), intersection))
 
@@ -195,11 +193,11 @@ class pp_solver(object):
         return []
       else:
         paper1 = paper1[0]
-    return list(reduce(lambda a, b: a + b, [find_joint(paper1.fid, paper2.fid),
-      find_joint(paper1.cid, paper2.cid),
-      find_joint(paper1.jid, paper2.jid),
-      find_joint(paper1.auid, paper2.auid),
-      find_joint(paper1.rid, paper2_refids)]))
+    return list(reduce(lambda a, b: a + b, [find_way(paper1.fid, paper2.fid),
+      find_way(paper1.cid, paper2.cid),
+      find_way(paper1.jid, paper2.jid),
+      find_way(paper1.auid, paper2.auid),
+      find_way(paper1.rid, paper2_refids)]))
 
   @staticmethod
   async def solve(paper1, paper2):
@@ -230,11 +228,10 @@ class aa_solver(object):
   async def solve_2hop(auid1, auid2):
     async def search_by_paper(count=default_count):
       resp = await send_http_request('AND(Composite(AA.AuId=%d),Composite(AA.AuId=%d))' % (auid1, auid2), count=count, attributes=('Id',))
-      papers = list(map(parse_paper_json, resp))
-      return list(map(lambda p: (auid1, p.id, auid2), papers))
+      return list(map(lambda p: (auid1, p['Id'], auid2), resp))
 
     async def search_by_affiliation(count=default_count):
-      # TODO: merge these two queries using primitive OR?
+      # TODO: merge these two queries using primitive OR ?
       aff1, aff2 = await asyncio.gather(search_affiliations_by_author(auid1), search_affiliations_by_author(auid2))
       intersection = get_intersection(aff1, aff2)
       return list(map(lambda x: (auid1, x, auid2), intersection))
@@ -261,22 +258,19 @@ class aa_solver(object):
         intersection = get_intersection(paper.rid, paper_id2)
         return list(map(lambda id: (auid1, paper.id, id, auid2), intersection))
 
-      return list(reduce(lambda a, b: a+b, list(map(find, paper_list1))))
+      return list(reduce(lambda a, b: a+b, list(map(find, paper_list1)), []))
 
     return [aa_solver.solve_1hop(auid1, auid2), aa_solver.solve_2hop(auid1, auid2), search_bidirection_papers(auid1, auid2)]
 
 class ap_solver(object):
   @staticmethod
   async def solve_1hop(auid, paper):
-    if auid in paper.auid:
-      return [(auid, paper.id)]
-    return []
+    return [(auid, paper.id)] if auid in paper.auid else []
 
   @staticmethod
   async def solve_2hop(auid, paper, count=default_count):
     resp = await send_http_request('AND(Composite(AA.AuId=%d),RId=%d)' % (auid, paper.id), count=count, attributes=('Id',))
-    papers = list(map(parse_paper_json, resp))
-    return list(map(lambda mp: (auid, mp.id, paper.id), papers))
+    return list(map(lambda mp: (auid, mp['Id'], paper.id), resp))
 
   @staticmethod
   async def solve(auid, paper):
