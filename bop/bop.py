@@ -205,8 +205,11 @@ class pp_solver(object):
 
   @staticmethod
   async def solve(paper1, paper2):
+    paper2_refs = await search_papers_by_ref(paper2.id)
+    paper2_refids = list(map(lambda p: p.id, paper2_refs))
+
     async def search_forward_reference(rid):
-      result = await pp_solver.solve_2hop(rid, paper2)
+      result = await pp_solver.solve_2hop(rid, paper2, paper2_refids=paper2_refids)
       return list(map(lambda l: (paper1.id,) + l, result))
 
     async def search_backward_reference(ref_paper):
@@ -214,9 +217,6 @@ class pp_solver(object):
       # setting one paper2_refids to empty list avoids duplicate search records.
       result = await pp_solver.solve_2hop(paper1, ref_paper, paper2_refids=[])
       return list(map(lambda l: l + (paper2.id,), result))
-
-    paper2_refs = await search_papers_by_ref(paper2.id)
-    paper2_refids = list(map(lambda p: p.id, paper2_refs))
 
     tasks  = [pp_solver.solve_1hop(paper1, paper2), pp_solver.solve_2hop(paper1, paper2, paper2_refids)]
     tasks += list(map(search_forward_reference, paper1.rid))
@@ -278,20 +278,20 @@ class ap_solver(object):
 
   @staticmethod
   async def solve(auid, paper):
+    (apapers, affiliations), paper_refs = await asyncio.gather(search_papers_and_affiliations_by_author(auid), search_papers_by_ref(paper.id, attrs=('Id',)))
+    paper_refids = list(map(lambda p: p.id, paper_refs))
+
     async def search_forward_affiliation(afid):
       authors = get_intersection(paper.auid, await search_authors_by_affiliation(afid))
       return list(map(lambda a: (auid, afid, a, paper.id), authors))
 
-    async def search_forward_paper(paper1, paper2):
-      ways = await pp_solver.solve_2hop(paper1, paper2)
+    async def search_forward_paper(paper1):
+      ways = await pp_solver.solve_2hop(paper1, paper, paper2_refids=paper_refids)
       return list(map(lambda l: (auid,) + l, ways))
 
     tasks = [ap_solver.solve_1hop(auid, paper), ap_solver.solve_2hop(auid, paper)]
-
-    apapers, affiliations = await search_papers_and_affiliations_by_author(auid)
-
     tasks += list(map(search_forward_affiliation, affiliations)) # author->affiliation->author->paper
-    tasks += list(map(lambda p: search_forward_paper(p, paper), apapers)) # author->paper->?->paper
+    tasks += list(map(search_forward_paper, apapers)) # author->paper->?->paper
     return tasks
 
 class pa_solver(object):
