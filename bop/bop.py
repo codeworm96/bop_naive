@@ -105,8 +105,8 @@ async def fetch_papers(paids):
   return papers
 
 # search papers which references this paper
-async def search_papers_by_ref(id, count=default_count):
-  resp = await send_http_request('RId=%d' % (id), count=count, attributes=PAPER_ATTR)
+async def search_papers_by_ref(rid, count=default_count):
+  resp = await send_http_request('RId=%d' % (rid), count=count, attributes=PAPER_ATTR)
   return list(map(parse_paper_json, resp))
 
 # search papers of this author
@@ -157,13 +157,13 @@ class pp_solver(object):
       intersection = get_intersection(list1, list2)
       return list(map(lambda x: (paper1.id, x, paper2.id), intersection))
 
-    if not paper2_refids:
+    if paper2_refids == None:
       paper2_refids = map(lambda p: p.id, await search_papers_by_ref(paper2.id))
-    return reduce(lambda a, b: a + b, [find_joint(paper1.fid, paper2.fid),
+    return list(reduce(lambda a, b: a + b, [find_joint(paper1.fid, paper2.fid),
       find_joint(paper1.cid, paper2.cid),
       find_joint(paper1.jid, paper2.jid),
       find_joint(paper1.auid, paper2.auid),
-      find_joint(paper1.rid, paper2_refids)])
+      find_joint(paper1.rid, paper2_refids)]))
 
   @staticmethod
   async def solve(paper1: Paper, paper2: Paper):
@@ -174,18 +174,16 @@ class pp_solver(object):
       result = await pp_solver.solve_2hop(papers[0], paper2)
       return list(map(lambda l: (paper1.id,) + l, result))
 
-    async def search_backward_reference(rid):
-      papers = await fetch_papers([rid])
-      if not papers:
-        return []
-      result = await pp_solver.solve_2hop(paper1, papers[0])
+    async def search_backward_reference(ref_paper):
+      result = await pp_solver.solve_2hop(paper1, ref_paper)
       return list(map(lambda l: l + (paper2.id,), result))
 
-    paper2_refids = map(lambda p: p.id, await search_papers_by_ref(paper2.id))
+    paper2_refs = await search_papers_by_ref(paper2.id)
+    paper2_refids = map(lambda p: p.id, paper2_refs)
 
-    tasks  = [pp_solver.solve_1hop(paper1, paper2), pp_solver.solve_2hop(paper1, paper2, paper2_refids)]
+    tasks  = [pp_solver.solve_1hop(paper1, paper2), pp_solver.solve_2hop(paper1, paper2, paper2_refids)] 
     tasks += list(map(search_forward_reference, paper1.rid))
-    tasks += list(map(search_backward_reference, paper2_refids))
+    tasks += list(map(search_backward_reference, paper2_refs))
     return tasks
 
 class aa_solver(object):
@@ -305,7 +303,7 @@ async def worker(request):
   set_start_time()
   result = await solve(id1, id2)
   logger.info('%d->%d: elapsed_time=%f' % (id1, id2, get_elapsed_time()))
-  logger.info('%d->%d: %d path(s) found, %s' % (len(result), id1, id2, str(result)))
+  logger.info('%d->%d: %d path(s) found, %s' % (id1, id2, len(result), str(result)))
   return web.json_response(result)
 
 if __name__ == '__main__':

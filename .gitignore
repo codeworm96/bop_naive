@@ -2,7 +2,7 @@
 *swp
 
 # logs
-bop.log
+*.log
 
 # python temporary files
 *.pyc
