@@ -209,7 +209,14 @@ class aa_solver(object):
 
   @staticmethod
   async def solve(auid1: int, auid2: int):
-    return [aa_solver.solve_1hop(auid1, auid2), aa_solver.solve_2hop(auid1, auid2)]
+    async def search_backward_paper(paper):
+      ways = await ap_solver.solve_2hop(auid1, paper)
+      return list(map(lambda l: l+(auid2,), ways))
+
+    papers2 = await search_papers_by_author(auid2)
+    tasks  = [aa_solver.solve_1hop(auid1, auid2), aa_solver.solve_2hop(auid1, auid2)]
+    tasks += list(map(search_backward_paper, papers2))
+    return tasks
 
 class ap_solver(object):
   @staticmethod
@@ -260,14 +267,30 @@ class pa_solver(object):
     return [(paper.id, auid)] if auid in paper.auid else []
 
   @staticmethod
-  async def solve_2hop(paper: Paper, auid: int):
+  async def solve_2hop(paper: Paper, auid: int, apapers=None):
     rid_set = set(paper.rid)
-    papers = filter(lambda p: p.id in rid_set, await search_papers_by_author(auid))
-    return list(map(lambda mp: (paper.id, mp.id, auid), papers))
+    if apapers == None:
+      apapers = await search_papers_by_author(auid)
+    ok_papers = list(filter(lambda p: p.id in rid_set, apapers))
+    return list(map(lambda mp: (paper.id, mp.id, auid), ok_papers))
 
   @staticmethod
   async def solve(paper: Paper, auid: int):
-    return [pa_solver.solve_1hop(paper, auid), pa_solver.solve_2hop(paper, auid)]
+    async def search_backward_paper(paper2):
+      ways = await pp_solver.solve_2hop(paper, paper2)
+      return list(map(lambda l: l + (auid,), ways))
+
+    async def search_backward_affiliation(afid):
+      authors = await search_authors_by_affiliation(afid)
+      ok_authors = get_intersection(paper.auid, authors)
+      return list(map(lambda a: (paper.id, a, afid, auid), ok_authors))
+
+    apapers = await search_papers_by_author(auid)
+    affiliations = await search_affiliations_by_author(auid)
+    tasks  = [pa_solver.solve_1hop(paper, auid), pa_solver.solve_2hop(paper, auid, apapers)]
+    tasks += list(map(search_backward_paper, apapers))
+    tasks += list(map(search_backward_affiliation, affiliations))
+    return tasks
 
 async def solve(id1, id2):
   (type1, obj1), (type2, obj2) = await asyncio.gather(get_id_type(id1), get_id_type(id2))
