@@ -6,7 +6,8 @@ from functools import reduce
 
 start_time = 0
 logger = logging.getLogger(__name__)
-default_count = 1000
+default_count = 50 # TODO: maybe to small
+default_attrs = ('Id','F.FId','C.CId','J.JId','AA.AuId','AA.AfId','RId')
 client_session = None
 time_limit = 300 # TODO: 300 is not a suitable value, see how score is evaluated
 
@@ -18,10 +19,10 @@ def get_elapsed_time():
   return time.time() - start_time
 
 def get_intersection(b1, b2):
-  return list(set(b1).intersection(set(b2)))
+  return set(b1).intersection(set(b2))
 
 def get_union(b1, b2):
-  return list(set(b1).union(set(b2)))
+  return set(b1).union(set(b2))
 
 # TODO: searching strategy shall make sure there is no duplicate element
 def make_unique(l):
@@ -142,19 +143,19 @@ async def search_authors_by_affiliation(afid, count=default_count):
   resp = await send_http_request('Composite(AA.AfId=%d)' % (afid), count=count, attributes=('Id','AA.AuId','AA.AfId'))
   papers = list(map(parse_paper_json, resp))
   authors = list(map(lambda p: filter_by_afid(p.auid, p.afid), papers))
-  return list(reduce(get_union, authors, []))
+  return list(reduce(get_union, authors, set()))
 
 # search papers and affiliations which the author attaches to
 async def search_papers_and_affiliations_by_author(auid, count=default_count):
   def filter_by_auid(auid_list, afid_list):
     def check(x):
-      return x[0] == auid and x[1]
+      return x[0] == auid and x[1] # also drop authors with AfId=None
     auf_zip = list(filter(check, list(zip(auid_list, afid_list))))
     return [b for (a, b) in auf_zip]
 
   papers = await search_papers_by_author(auid, count=count)
   affiliations = list(map(lambda p: filter_by_auid(p.auid, p.afid), papers))
-  return papers, list(reduce(get_union, affiliations, []))
+  return papers, list(reduce(get_union, affiliations, set()))
 
 # search affiliations which the author attaches to
 async def search_affiliations_by_author(auid, count=default_count):
