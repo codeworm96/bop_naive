@@ -22,8 +22,9 @@ def get_intersection(b1, b2):
 def get_union(b1, b2):
   return list(set(b1).union(set(b2)))
 
+# TODO: searching strategy shall make sure there is no duplicate element
 def make_unique(l):
-  return list(set(l))
+  return l # list(set(l))
 
 async def send_http_request(expr, count=None, attributes=None):
   subscription_key = 'f7cc29509a8443c5b3a5e56b0e38b5a6'
@@ -45,7 +46,8 @@ async def send_http_request(expr, count=None, attributes=None):
 
 class Paper(object):
   def __init__(self, id, fid, cid, jid, auid, afid, rid):
-    # warning: NEVER tries to make id list a set, we require order on auid and afid
+    # WARNING: NEVER tries to make id list a set, we require order on auid and afid
+    # TIPS: some fields may be missing because we don't need it
     self.id = id
     self.fid = fid if fid else []
     self.cid = cid if cid else []
@@ -55,7 +57,7 @@ class Paper(object):
     self.rid = rid if rid else []
 
 def parse_paper_json(entity):
-  id, fid, cid, jid, auid, rid = 0, None, None, None, None, None
+  id, fid, cid, jid, auid, afid, rid = 0, None, None, None, None, None, None
   id = entity['Id']
   if 'F' in entity:
     fid = [d['FId'] for d in entity['F']]
@@ -70,7 +72,6 @@ def parse_paper_json(entity):
     rid = entity['RId']
   return Paper(id, fid, cid, jid, auid, afid, rid)
 
-PAPER_ATTR = ('Id', 'F.FId', 'C.CId', 'J.JId', 'AA.AuId', 'AA.AfId', 'RId')
 TYPE_UNKNOWN, TYPE_PAPER, TYPE_AUTHOR = 0, 1, 2
 
 def show_type(ty):
@@ -82,7 +83,7 @@ def show_type(ty):
 
 # get the type of one id, return a pair (TYPE_XXX, Paper object if TYPE_PAPER / AA.AuId if TYPE_AUTHOR)
 async def get_id_type(id):
-  resp = await send_http_request('OR(Id=%d,Composite(AA.AuId=%d))' % (id, id), count=1, attributes=PAPER_ATTR+('Ti',))
+  resp = await send_http_request('OR(Id=%d,Composite(AA.AuId=%d))' % (id, id), count=1, attributes=('Id','F.FId','C.CId','J.JId','AA.AuId','AA.AfId','RId','Ti'))
   if resp:
     entity = resp[0]
     return (TYPE_PAPER, parse_paper_json(entity)) if 'Ti' in entity else (TYPE_AUTHOR, id)
@@ -94,7 +95,7 @@ async def fetch_papers(paids):
   for paid in paids:
     tmp = 'Id=%d' % (paid)
     expr = 'OR(%s,%s)' % (expr, tmp) if expr else tmp
-  resp = await send_http_request(expr, count=len(paids), attributes=PAPER_ATTR)
+  resp = await send_http_request(expr, count=len(paids), attributes=('Id','F.FId','C.CId','J.JId','AA.AuId','AA.AfId','RId'))
   if len(resp) != len(paids):
     logger.error('fetched incomplete paper list of %s' % (str(paids)))
     return None
@@ -109,12 +110,12 @@ async def fetch_papers(paids):
 
 # search papers which references this paper
 async def search_papers_by_ref(rid, count=default_count):
-  resp = await send_http_request('RId=%d' % (rid), count=count, attributes=PAPER_ATTR)
+  resp = await send_http_request('RId=%d' % (rid), count=count, attributes=('Id','F.FId','C.CId','J.JId','AA.AuId','AA.AfId','RId'))
   return list(map(parse_paper_json, resp))
 
 # search papers of this author
 async def search_papers_by_author(auid, count=default_count):
-  resp = await send_http_request('Composite(AA.AuId=%d)' % (auid), count=count, attributes=PAPER_ATTR)
+  resp = await send_http_request('Composite(AA.AuId=%d)' % (auid), count=count, attributes=('Id','F.FId','C.CId','J.JId','AA.AuId','AA.AfId','RId'))
   return list(map(parse_paper_json, resp))
 
 # search authors which is attached to this affiliation
@@ -125,7 +126,7 @@ async def search_authors_by_affiliation(afid, count=default_count):
     auf_zip = list(filter(check, list(zip(auid_list, afid_list))))
     return [a for (a, b) in auf_zip]
 
-  resp = await send_http_request('Composite(AA.AfId=%d)' % (afid), count=count, attributes=PAPER_ATTR)
+  resp = await send_http_request('Composite(AA.AfId=%d)' % (afid), count=count, attributes=('Id','AA.AuId','AA.AfId'))
   papers = list(map(parse_paper_json, resp))
   authors = list(map(lambda p: filter_by_afid(p.auid, p.afid), papers))
   return list(reduce(get_union, authors, []))
@@ -193,7 +194,9 @@ class pp_solver(object):
       return list(map(lambda l: (paper1.id,) + l, result))
 
     async def search_backward_reference(ref_paper):
-      result = await pp_solver.solve_2hop(paper1, ref_paper)
+      # search_forward_reference and search_backward_reference both search path Paper->Paper->Paper->Paper,
+      # setting one paper2_refids to empty list avoids duplicate search records.
+      result = await pp_solver.solve_2hop(paper1, ref_paper, paper2_refids=[])
       return list(map(lambda l: l + (paper2.id,), result))
 
     paper2_refs = await search_papers_by_ref(paper2.id)
@@ -212,7 +215,7 @@ class aa_solver(object):
   @staticmethod
   async def solve_2hop(auid1, auid2):
     async def search_by_paper(count=default_count):
-      resp = await send_http_request('AND(Composite(AA.AuId=%d),Composite(AA.AuId=%d))' % (auid1, auid2), count=count, attributes=PAPER_ATTR)
+      resp = await send_http_request('AND(Composite(AA.AuId=%d),Composite(AA.AuId=%d))' % (auid1, auid2), count=count, attributes=('Id',))
       papers = list(map(parse_paper_json, resp))
       return list(map(lambda p: (auid1, p.id, auid2), papers))
 
@@ -227,15 +230,25 @@ class aa_solver(object):
 
   @staticmethod
   async def solve(auid1, auid2):
-    # TODO: exists another method to solve author->paper->paper->author but requires more local computing
-    async def search_backward_paper(paper):
-      ways = await ap_solver.solve_2hop(auid1, paper)
-      return list(map(lambda l: l+(auid2,), ways))
+    # async def search_backward_paper(paper):
+      # ways = await ap_solver.solve_2hop(auid1, paper)
+      # return list(map(lambda l: l+(auid2,), ways))
 
-    papers2 = await search_papers_by_author(auid2)
-    tasks  = [aa_solver.solve_1hop(auid1, auid2), aa_solver.solve_2hop(auid1, auid2)]
-    tasks += list(map(search_backward_paper, papers2))
-    return tasks
+    # papers2 = await search_papers_by_author(auid2)
+    # tasks  = [aa_solver.solve_1hop(auid1, auid2), aa_solver.solve_2hop(auid1, auid2)]
+    # tasks += list(map(search_backward_paper, papers2))
+
+    async def search_bidirection_papers(auid1, auid2):
+      paper_list1, paper_list2 = await asyncio.gather(search_papers_by_author(auid1), search_papers_by_author(auid2))
+      paper_id2 = set(list(map(lambda p: p.id, paper_list2)))
+
+      def find(paper):
+        intersection = get_intersection(paper.rid, paper_id2)
+        return list(map(lambda id: (auid1, paper.id, id, auid2), intersection))
+
+      return list(reduce(lambda a, b: a+b, list(map(find, paper_list1))))
+
+    return [aa_solver.solve_1hop(auid1, auid2), aa_solver.solve_2hop(auid1, auid2), search_bidirection_papers(auid1, auid2)]
 
 class ap_solver(object):
   @staticmethod
@@ -246,7 +259,7 @@ class ap_solver(object):
 
   @staticmethod
   async def solve_2hop(auid, paper, count=default_count):
-    resp = await send_http_request('AND(Composite(AA.AuId=%d),RId=%d)' % (auid, paper.id), count=count, attributes=PAPER_ATTR)
+    resp = await send_http_request('AND(Composite(AA.AuId=%d),RId=%d)' % (auid, paper.id), count=count, attributes=('Id',))
     papers = list(map(parse_paper_json, resp))
     return list(map(lambda mp: (auid, mp.id, paper.id), papers))
 
