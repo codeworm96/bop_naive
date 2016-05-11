@@ -84,7 +84,7 @@ def show_type(ty):
 
 # get the type of one id, return a pair (TYPE_XXX, Paper object if TYPE_PAPER / AA.AuId if TYPE_AUTHOR)
 async def get_id_type(id1, id2):
-  resp = await send_http_request('OR(Id=%d,Id=%d)' % (id1, id2), count=2, attributes=('Id','F.FId','C.CId','J.JId','AA.AuId','AA.AfId','RId','Ti'))
+  resp = await send_http_request('OR(Id=%d,Id=%d)' % (id1, id2), count=2, attributes=default_attrs+('Ti',))
   if len(resp) == 2:
     entity1, entity2 = resp
     if entity1['Id'] != id1:
@@ -109,7 +109,7 @@ async def fetch_papers(paids):
   for paid in paids:
     tmp = 'Id=%d' % (paid)
     expr = 'OR(%s,%s)' % (expr, tmp) if expr else tmp
-  resp = await send_http_request(expr, count=len(paids), attributes=('Id','F.FId','C.CId','J.JId','AA.AuId','AA.AfId','RId'))
+  resp = await send_http_request(expr, count=len(paids), attributes=default_attrs)
   if len(resp) != len(paids):
     logger.error('fetched incomplete paper list of %s' % (str(paids)))
     return None
@@ -123,13 +123,13 @@ async def fetch_papers(paids):
   return papers
 
 # search papers which references this paper
-async def search_papers_by_ref(rid, count=default_count):
-  resp = await send_http_request('RId=%d' % (rid), count=count, attributes=('Id','F.FId','C.CId','J.JId','AA.AuId','AA.AfId','RId'))
+async def search_papers_by_ref(rid, count=default_count, attrs=default_attrs):
+  resp = await send_http_request('RId=%d' % (rid), count=count, attributes=attrs)
   return list(map(parse_paper_json, resp))
 
 # search papers of this author
-async def search_papers_by_author(auid, count=default_count):
-  resp = await send_http_request('Composite(AA.AuId=%d)' % (auid), count=count, attributes=('Id','F.FId','C.CId','J.JId','AA.AuId','AA.AfId','RId'))
+async def search_papers_by_author(auid, count=default_count, attrs=default_attrs):
+  resp = await send_http_request('Composite(AA.AuId=%d)' % (auid), count=count, attributes=default_attrs)
   return list(map(parse_paper_json, resp))
 
 # search authors which is attached to this affiliation
@@ -146,21 +146,25 @@ async def search_authors_by_affiliation(afid, count=default_count):
   return list(reduce(get_union, authors, set()))
 
 # search papers and affiliations which the author attaches to
-async def search_papers_and_affiliations_by_author(auid, count=default_count):
+async def search_papers_and_affiliations_by_author(auid, count=default_count, attrs=default_attrs):
   def filter_by_auid(auid_list, afid_list):
-    def check(x):
-      return x[0] == auid and x[1] # also drop authors with AfId=None
-    auf_zip = list(filter(check, list(zip(auid_list, afid_list))))
+    auf_zip = list(filter(lambda x: x[0] == auid and x[1], list(zip(auid_list, afid_list))))
     return [b for (a, b) in auf_zip]
 
-  papers = await search_papers_by_author(auid, count=count)
+  papers = await search_papers_by_author(auid, count=count, attrs=attrs)
   affiliations = list(map(lambda p: filter_by_auid(p.auid, p.afid), papers))
   return papers, list(reduce(get_union, affiliations, set()))
 
 # search affiliations which the author attaches to
+# FIXME: contains duplicate code from search_papers_and_affiliations_by_author
 async def search_affiliations_by_author(auid, count=default_count):
-  _, affiliations = await search_papers_and_affiliations_by_author(auid, count)
-  return affiliations
+  def filter_by_auid(auid_list, afid_list):
+    auf_zip = list(filter(lambda x: x[0] == auid and x[1], list(zip(auid_list, afid_list))))
+    return [b for (a, b) in auf_zip]
+
+  papers = await search_papers_by_author(auid, count=count, attrs=('Id', 'AA.AuId', 'AA.AfId'))
+  affiliations = list(map(lambda p: filter_by_auid(p.auid, p.afid), papers))
+  return list(reduce(get_union, affiliations, set()))
 
 # notes on pp_solver/pa_solver/ap_solver/aa_solver:
 # all solvers provide three static methods `solve_1hop`, `solve_2hop` and `solve`,
@@ -179,14 +183,14 @@ class pp_solver(object):
       return list(map(lambda x: (paper1.id, x, paper2.id), intersection))
 
     if paper2_refids == None and isinstance(paper1, int):
-      paper2_refs, paper1 = await asyncio.gather(search_papers_by_ref(paper2.id), fetch_papers([paper1]))
+      paper2_refs, paper1 = await asyncio.gather(search_papers_by_ref(paper2.id, attrs=('Id',)), fetch_papers([paper1]))
       paper2_refids = list(map(lambda p: p.id, paper2_refs))
       if not paper1:
         return []
       else:
         paper1 = paper1[0]
     elif paper2_refids == None:
-      paper2_refids = list(map(lambda p: p.id, await search_papers_by_ref(paper2.id)))
+      paper2_refids = list(map(lambda p: p.id, await search_papers_by_ref(paper2.id, attrs=('Id',))))
     elif isinstance(paper1, int):
       paper1 = await fetch_papers([paper1])
       if not paper1:
@@ -251,7 +255,7 @@ class aa_solver(object):
     # return tasks
 
     async def search_bidirection_papers(auid1, auid2):
-      paper_list1, paper_list2 = await asyncio.gather(search_papers_by_author(auid1), search_papers_by_author(auid2))
+      paper_list1, paper_list2 = await asyncio.gather(search_papers_by_author(auid1, attrs=('Id','RId')), search_papers_by_author(auid2, attrs=('Id',)))
       paper_id2 = set(list(map(lambda p: p.id, paper_list2)))
 
       def find(paper):
@@ -299,7 +303,7 @@ class pa_solver(object):
   async def solve_2hop(paper, auid, apapers=None):
     rid_set = set(paper.rid)
     if apapers == None:
-      apapers = await search_papers_by_author(auid)
+      apapers = await search_papers_by_author(auid, attrs=('Id',))
     ok_papers = list(filter(lambda p: p.id in rid_set, apapers))
     return list(map(lambda mp: (paper.id, mp.id, auid), ok_papers))
 
