@@ -5,11 +5,24 @@ from sys import argv, stderr
 from functools import reduce
 
 start_time = 0
-logger = logging.getLogger(__name__)
-default_count = 50 # TODO: maybe to small
-default_attrs = ('Id','F.FId','C.CId','J.JId','AA.AuId','AA.AfId','RId')
+aggressive = False
 client_session = None
-time_limit = 300 # TODO: 300 is not a suitable value, see how score is evaluated
+logger = logging.getLogger(__name__)
+
+default_attrs = ('Id','F.FId','C.CId','J.JId','AA.AuId','AA.AfId','RId')
+
+# parameters (need adjusting)
+default_count = 50    # TODO: maybe to small
+time_limit = 300      # TODO: 300 is not a suitable value, see how score is evaluated
+single_time_limit = 2 # time limit on single HTTP request
+
+def enter_aggressive():
+  global aggressive
+  aggressive = True
+
+def leave_aggressive():
+  global aggressive
+  aggressive = False
 
 def set_start_time():
   global start_time
@@ -36,14 +49,27 @@ async def send_http_request(expr, count=None, attributes=None):
     params['count'] = count
   if attributes:
     params['attributes'] = ','.join(attributes)
-  async with client_session.get(bop_url, params=params) as resp:
-    # logger.info('sending HTTP request: %s' % resp.url)
-    json = await resp.json()
-    if 'entities' in json:
-      return json['entities']
-    else:
-      logger.error('invalid response from server')
-      return []
+
+  async def shoot():
+    async with client_session.get(bop_url, params=params) as resp:
+      # logger.info('sending HTTP request: %s' % resp.url)
+      json = await resp.json()
+      if 'entities' in json:
+        return json['entities']
+      else:
+        logger.error('invalid response from server')
+        return []
+
+  if aggressive:
+    done, pending = await asyncio.wait([shoot(), shoot(), shoot()], return_when=asyncio.FIRST_COMPLETED)
+  else:
+    done, pending = await asyncio.wait([shoot()], timeout=single_time_limit)
+  for future in pending:
+    future.cancel()
+  done = list(done)
+  if done:
+    return done[0].result()
+  return []
 
 class Paper(object):
   def __init__(self, id, fid, cid, jid, auid, afid, rid):
@@ -328,6 +354,7 @@ async def solve(id1, id2):
   (type1, obj1), (type2, obj2) = await get_id_type(id1, id2)
   logger.info('solving test (%d,%s),(%d,%s)' % (id1, show_type(type1), id2, show_type(type2)))
   fs = None
+  enter_aggressive()
   if type1 == TYPE_PAPER and type2 == TYPE_PAPER:
     assert obj1.id == id1 and obj2.id == id2
     fs = await pp_solver.solve(obj1, obj2)
@@ -339,7 +366,9 @@ async def solve(id1, id2):
     fs = await pa_solver.solve(obj1, obj2)
   else:
     logger.error('type-unknown found id=%d,%d' % (id1, id2))
+    leave_aggressive()
     return []
+  leave_aggressive()
   done, _ = await asyncio.wait(fs, timeout=time_limit-get_elapsed_time())
   return make_unique(list(reduce(lambda l1, l2: l1+l2, map(lambda f: f.result(), done), [])))
 
