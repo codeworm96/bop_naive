@@ -35,9 +35,13 @@ async def send_http_request(expr, count=None, attributes=None):
     params['attributes'] = ','.join(attributes)
   with aiohttp.ClientSession() as session:
     async with session.get(bop_url, params=params) as resp:
-      logger.info('sending HTTP request: %s' % resp.url)
+      # logger.info('sending HTTP request: %s' % resp.url)
       json = await resp.json()
-      return json['entities']
+      if 'entities' in json:
+        return json['entities']
+      else:
+        logger.error('invalid response from server')
+        return []
 
 class Paper(object):
   def __init__(self, id, fid, cid, jid, auid, afid, rid):
@@ -199,8 +203,8 @@ class aa_solver(object):
       return list(map(lambda p: (auid1, p.id, auid2), papers))
 
     async def search_by_affiliation(count=default_count):
-      aff1 = await search_affiliations_by_author(auid1)
-      aff2 = await search_affiliations_by_author(auid2)
+      # TODO: merge these two queries using primitive OR?
+      aff1, aff2 = await asyncio.gather(search_affiliations_by_author(auid1), search_affiliations_by_author(auid2))
       intersection = get_intersection(aff1, aff2)
       return list(map(lambda x: (auid1, x, auid2), intersection))
 
@@ -237,27 +241,16 @@ class ap_solver(object):
       authors = get_intersection(paper.auid, await search_authors_by_affiliation(afid))
       return list(map(lambda a: (auid, afid, a, paper.id)), authors)
 
-    # async def search_backward_reference(rid):
-      # papers = await fetch_papers([rid])
-      # if not papers:
-        # return []
-      # result = await ap_solver.solve_2hop(auid, papers[0])
-      # return list(map(lambda l: l + (paper.id,), result))
-
     async def search_forward_paper(paper1, paper2):
       ways = await pp_solver.solve_2hop(paper1, paper2)
       return list(map(lambda l: (auid,) + l, ways))
 
     tasks = [ap_solver.solve_1hop(auid, paper), ap_solver.solve_2hop(auid, paper)]
 
-    # TODO: gather those three asynchronous IO actions
     # TODO: search_papers_by_author/search_affiliations_by_author do the same HTTP query, merged?
-    author_papers = await search_papers_by_author(auid)
-    affiliations = await search_affiliations_by_author(auid)
-    # paper_refids = map(lambda p: p.id, await search_papers_by_ref(paper.id))
+    author_papers, affiliations = await asyncio.gather(search_papers_by_author(auid), search_affiliations_by_author(auid))
 
     tasks += list(map(search_forward_affiliation, affiliations)) # author->affiliation->author->paper
-    # tasks += list(map(search_backward_reference, paper_refids)) # author->?->paper->paper
     tasks += list(map(lambda p: search_forward_paper(p, paper), author_papers)) # author->paper->?->paper
     return tasks
 
@@ -285,8 +278,7 @@ class pa_solver(object):
       ok_authors = get_intersection(paper.auid, authors)
       return list(map(lambda a: (paper.id, a, afid, auid), ok_authors))
 
-    apapers = await search_papers_by_author(auid)
-    affiliations = await search_affiliations_by_author(auid)
+    apapers, affiliations = await asyncio.gather(search_papers_by_author(auid), search_affiliations_by_author(auid))
     tasks  = [pa_solver.solve_1hop(paper, auid), pa_solver.solve_2hop(paper, auid, apapers)]
     tasks += list(map(search_backward_paper, apapers))
     tasks += list(map(search_backward_affiliation, affiliations))
@@ -316,6 +308,7 @@ async def solve(id1, id2):
   return make_unique(list(reduce(lambda l1, l2: l1+l2, map(lambda f: f.result(), done), [])))
 
 async def worker(request):
+  logger.info(' ')
   d = request.GET
   try:
     id1, id2 = int(d['id1']), int(d['id2'])
@@ -340,8 +333,8 @@ if __name__ == '__main__':
 
   logging.basicConfig(filename='bop.log',
       filemode='a',
-      format='[%(asctime)s,%(msecs)d] [%(name)s] [%(levelname)s] %(message)s',
-      datefmt='%H:%M:%S',
+      format='[%(asctime)s] [%(name)-12s] [%(levelname)-8s] %(message)s',
+      datefmt='%m-%d %H:%M:%S',
       level=logging.DEBUG)
 
   ### begin DEBUG section ###
