@@ -1,0 +1,23 @@
+{
+  "name": "bop_naive",
+  "private": true,
+  "description": "bop2016 naive",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/codeworm96/bop_naive.git"
+  },
+  "bugs": {
+    "url": "https://github.com/codeworm96/bop_naive/issues"
+  },
+  "homepage": "https://github.com/codeworm96/bop_naive#readme",
+  "keywords": [
+    "BOP"
+  ],
+  "version": "0.0.1",
+  "main": "index.js",
+  "dependencies": {
+    "bluebird": "3.3.5"
+  },
+  "devDependencies": {},
+  "scripts": {}
+}
