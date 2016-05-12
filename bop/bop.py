@@ -193,6 +193,14 @@ async def search_affiliations_by_author(auid, count=default_count, au_papers=Non
   affiliations = list(map(lambda p: filter_by_auid(p.auid, p.afid), au_papers))
   return reduce(get_union, affiliations, set())
 
+async def search_paper_ids_by_coauthor(auid1, auid2, count=default_count):
+  resp = await send_http_request('AND(Composite(AA.AuId=%d),Composite(AA.AuId=%d))' % (auid1, auid2), count=count, attributes=('Id',))
+  return list(map(lambda p: p['Id'], resp))
+
+async def search_paper_ids_by_author_and_ref(auid, paper_id, count=default_count):
+  resp = await send_http_request('AND(Composite(AA.AuId=%d),RId=%d)' % (auid, paper_id), count=count, attributes=('Id',))
+  return list(map(lambda p: p['Id'], resp))
+
 # notes on pp_solver/pa_solver/ap_solver/aa_solver:
 # all solvers provide three static methods `solve_1hop`, `solve_2hop`, `prefetch` and `solve`,
 # the first two do the same thing as its name stated, note that they are primitive up to asynchronous.
@@ -204,6 +212,11 @@ class pp_solver(object):
   @staticmethod
   async def solve_1hop(paper1, paper2):
     return [(paper1.id, paper2.id)] if paper2.id in paper1.rid else []
+
+  @staticmethod
+  async def prefetch(paper2_id):
+    paper2_refs = await search_papers_by_ref(paper2_id)
+    return paper2_refs
 
   @staticmethod
   async def solve_2hop(paper1, paper2, paper2_refids=None):
@@ -231,11 +244,6 @@ class pp_solver(object):
       find_way(paper1.jid, paper2.jid),
       find_way(paper1.auid, paper2.auid),
       find_way(paper1.rid, paper2_refids)])
-
-  @staticmethod
-  async def prefetch(paper2_id):
-    paper2_refs = await search_papers_by_ref(paper2_id)
-    return paper2_refs
 
   @staticmethod
   async def solve(paper1, paper2, prefetched=None): # TODO: optimize, batch rids.
@@ -266,32 +274,35 @@ class aa_solver(object):
     return [] # don't be confused, indeed there is no possible path lol
 
   @staticmethod
-  async def solve_2hop(auid1, auid2, au1_papers=None, au2_papers=None): # TODO: this can prefetch
-    async def search_by_paper(count=default_count):
-      resp = await send_http_request('AND(Composite(AA.AuId=%d),Composite(AA.AuId=%d))' % (auid1, auid2), count=count, attributes=('Id',))
-      return list(map(lambda p: (auid1, p['Id'], auid2), resp))
+  async def prefetch(auid1, auid2):
+    au1_papers, au2_papers, coauthor_paper_ids = await asyncio.gather(
+        search_papers_by_author(auid1, attrs=('Id','RId','AA.AuId','AA.AfId')),
+        search_papers_by_author(auid2, attrs=('Id','AA.AuId','AA.AfId')),
+        search_paper_ids_by_coauthor(auid1, auid2))
+    return au1_papers, au2_papers, coauthor_paper_ids
 
-    async def search_by_affiliation(count=default_count):
+  @staticmethod
+  async def solve_2hop(auid1, auid2, au1_papers=None, au2_papers=None, coauthor_paper_ids=None):
+    async def search_by_paper(coauthor_paper_ids=None):
+      if coauthor_paper_ids == None:
+        coauthor_paper_ids = await search_paper_ids_by_coauthor(auid1, auid2)
+      return list(map(lambda id: (auid1, id, auid2), coauthor_paper_ids))
+
+    async def search_by_affiliation():
       # no await actually!
       aff1, aff2 = await asyncio.gather(search_affiliations_by_author(auid1, au_papers=au1_papers), search_affiliations_by_author(auid2, au_papers=au2_papers))
       intersection = get_intersection(aff1, aff2)
       return list(map(lambda x: (auid1, x, auid2), intersection))
 
-    way1, way2 = await asyncio.gather(search_by_paper(), search_by_affiliation())
+    way1, way2 = await asyncio.gather(search_by_paper(coauthor_paper_ids=coauthor_paper_ids), search_by_affiliation())
     return way1 + way2
-
-  @staticmethod
-  async def prefetch(auid1, auid2):
-    au1_papers, au2_papers = await asyncio.gather(search_papers_by_author(auid1, attrs=('Id','RId','AA.AuId','AA.AfId')),
-        search_papers_by_author(auid2, attrs=('Id','AA.AuId','AA.AfId')))
-    return au1_papers, au2_papers
 
   @staticmethod
   async def solve(auid1, auid2, prefetched=None):
     if prefetched != None:
-      au1_papers, au2_papers = prefetched
+      au1_papers, au2_papers, coauthor_paper_ids = prefetched
     else:
-      au1_papers, au2_papers = await aa_solver.prefetch(auid1, auid2)
+      au1_papers, au2_papers, coauthor_paper_ids = await aa_solver.prefetch(auid1, auid2)
 
     async def search_bidirection_papers():
       paper_id2 = set(list(map(lambda p: p.id, au2_papers)))
@@ -303,7 +314,7 @@ class aa_solver(object):
       return reduce(lambda a, b: a + b, list(map(find, au1_papers)), [])
 
     return [aa_solver.solve_1hop(auid1, auid2),
-        aa_solver.solve_2hop(auid1, auid2, au1_papers=au1_papers, au2_papers=au2_papers),
+        aa_solver.solve_2hop(auid1, auid2, au1_papers=au1_papers, au2_papers=au2_papers, coauthor_paper_ids=coauthor_paper_ids),
         search_bidirection_papers()]
 
 class ap_solver(object):
@@ -312,22 +323,25 @@ class ap_solver(object):
     return [(auid, paper.id)] if auid in paper.auid else []
 
   @staticmethod
-  async def solve_2hop(auid, paper, count=default_count): # TODO: this can prefetch
-    resp = await send_http_request('AND(Composite(AA.AuId=%d),RId=%d)' % (auid, paper.id), count=count, attributes=('Id',))
-    return list(map(lambda mp: (auid, mp['Id'], paper.id), resp))
+  async def prefetch(auid, paper_id):
+    (au_papers, affiliations), paper_refs, au_ref_paper_ids = await asyncio.gather(
+        search_papers_and_affiliations_by_author(auid),
+        search_papers_by_ref(paper_id, attrs=('Id',)),
+        search_paper_ids_by_author_and_ref(auid, paper_id))
+    return (au_papers, affiliations), paper_refs, au_ref_paper_ids
 
   @staticmethod
-  async def prefetch(auid, paper_id):
-    (au_papers, affiliations), paper_refs = await asyncio.gather(search_papers_and_affiliations_by_author(auid),
-        search_papers_by_ref(paper_id, attrs=('Id',)))
-    return (au_papers, affiliations), paper_refs
+  async def solve_2hop(auid, paper, au_ref_paper_ids=None):
+    if au_ref_paper_ids == None:
+      au_ref_paper_ids = search_paper_ids_by_author_and_ref(auid, paper.id)
+    return list(map(lambda id: (auid, id, paper.id), au_ref_paper_ids))
 
   @staticmethod
   async def solve(auid, paper, prefetched=None):
     if prefetched != None:
-      (au_papers, affiliations), paper_refs = prefetched
+      (au_papers, affiliations), paper_refs, au_ref_paper_ids = prefetched
     else:
-      (au_papers, affiliations), paper_refs = await ap_solver.prefetch(auid, paper.id)
+      (au_papers, affiliations), paper_refs, au_ref_paper_ids = await ap_solver.prefetch(auid, paper.id)
     paper_refids = list(map(lambda p: p.id, paper_refs))
 
     async def search_forward_affiliation(afid):
@@ -338,7 +352,7 @@ class ap_solver(object):
       ways = await pp_solver.solve_2hop(paper1, paper, paper2_refids=paper_refids)
       return list(map(lambda l: (auid,) + l, ways))
 
-    tasks = [ap_solver.solve_1hop(auid, paper), ap_solver.solve_2hop(auid, paper)]
+    tasks = [ap_solver.solve_1hop(auid, paper), ap_solver.solve_2hop(auid, paper, au_ref_paper_ids=au_ref_paper_ids)]
     tasks += list(map(search_forward_affiliation, affiliations)) # author->affiliation->author->paper
     tasks += list(map(search_forward_paper, au_papers)) # author->paper->?->paper
     return tasks
@@ -350,17 +364,17 @@ class pa_solver(object):
     return [(paper.id, auid)] if auid in paper.auid else []
 
   @staticmethod
+  async def prefetch(auid):
+    au_papers, affiliations = await search_papers_and_affiliations_by_author(auid)
+    return au_papers, affiliations
+
+  @staticmethod
   async def solve_2hop(paper, auid, au_papers=None):
     rid_set = set(paper.rid)
     if au_papers == None:
       au_papers = await search_papers_by_author(auid, attrs=('Id',))
     ok_papers = list(filter(lambda p: p.id in rid_set, au_papers))
     return list(map(lambda mp: (paper.id, mp.id, auid), ok_papers))
-
-  @staticmethod
-  async def prefetch(auid):
-    au_papers, affiliations = await search_papers_and_affiliations_by_author(auid)
-    return au_papers, affiliations
 
   @staticmethod
   async def solve(paper, auid, prefetched=None):
