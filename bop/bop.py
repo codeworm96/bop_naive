@@ -12,9 +12,9 @@ logger = logging.getLogger(__name__)
 default_attrs = ('Id','F.FId','C.CId','J.JId','AA.AuId','AA.AfId','RId')
 
 # parameters (need adjusting)
-default_count = 500    # TODO: maybe to small
+default_count = 50     # TODO: maybe to small
 time_limit = 300       # TODO: 300 is not a suitable value, see how score is evaluated
-single_time_limit = 1  # time limit on single HTTP request
+single_time_limit = 10 # time limit on single HTTP request
 
 # TODO: keep-alive pools timeout
 
@@ -160,19 +160,6 @@ async def search_papers_by_author(auid, count=default_count, attrs=default_attrs
   resp = await send_http_request('Composite(AA.AuId=%d)' % (auid), count=count, attributes=default_attrs)
   return list(map(parse_paper_json, resp))
 
-# search authors which is attached to this affiliation
-async def search_authors_by_affiliation(afid, count=default_count):
-  def filter_by_afid(auid_list, afid_list):
-    def check(x):
-      return x[1] == afid
-    auf_zip = list(filter(check, zip(auid_list, afid_list)))
-    return [a for (a, b) in auf_zip]
-
-  resp = await send_http_request('Composite(AA.AfId=%d)' % (afid), count=count, attributes=('Id','AA.AuId','AA.AfId'))
-  papers = list(map(parse_paper_json, resp))
-  authors = list(map(lambda p: filter_by_afid(p.auid, p.afid), papers))
-  return reduce(get_union, authors, set())
-
 # search papers and affiliations which the author attaches to
 async def search_papers_and_affiliations_by_author(auid, count=default_count, attrs=default_attrs):
   def filter_by_auid(auid_list, afid_list):
@@ -202,6 +189,10 @@ async def search_paper_ids_by_coauthor(auid1, auid2, count=default_count):
 async def search_paper_ids_by_author_and_ref(auid, paper_id, count=default_count):
   resp = await send_http_request('AND(Composite(AA.AuId=%d),RId=%d)' % (auid, paper_id), count=count, attributes=('Id',))
   return list(map(lambda p: p['Id'], resp))
+
+async def test_author_in_affiliation(auid, afid):
+  resp = await send_http_request('Composite(And(AA.AuId=%d,AA.AfId=%d))' % (auid, afid), attributes=('Id',), count=1)
+  return len(resp) == 1
 
 # notes on pp_solver/pa_solver/ap_solver/aa_solver:
 # all solvers provide three static methods `solve_1hop`, `solve_2hop`, `prefetch` and `solve`,
@@ -346,17 +337,18 @@ class ap_solver(object):
       (au_papers, affiliations), paper_refs, au_ref_paper_ids = await ap_solver.prefetch(auid, paper.id)
     paper_refids = list(map(lambda p: p.id, paper_refs))
 
-    async def search_forward_affiliation(afid):
-      authors = get_intersection(paper.auid, await search_authors_by_affiliation(afid))
-      return list(map(lambda a: (auid, afid, a, paper.id), authors))
-
     async def search_forward_paper(paper1):
       ways = await pp_solver.solve_2hop(paper1, paper, paper2_refids=paper_refids)
       return list(map(lambda l: (auid,) + l, ways))
 
+    async def search_both_affiliation_and_author(afid, auid2):
+      if await test_author_in_affiliation(auid2, afid):
+        return [(auid, afid, auid2, paper.id)]
+      return []
+
     tasks = [ap_solver.solve_1hop(auid, paper), ap_solver.solve_2hop(auid, paper, au_ref_paper_ids=au_ref_paper_ids)]
-    tasks += list(map(search_forward_affiliation, affiliations)) # author->affiliation->author->paper
-    tasks += list(map(search_forward_paper, au_papers)) # author->paper->?->paper
+    tasks += list(map(search_forward_paper, au_papers))
+    tasks += [search_both_affiliation_and_author(afid, auid2) for afid in affiliations for auid2 in paper.auid]
     return tasks
 
 # TODO: a bit time-consuming, consider a better strategy
@@ -386,20 +378,30 @@ class pa_solver(object):
       au_papers, affiliations = await pa_solver.prefetch(auid)
 
     async def search_backward_paper(paper2):
-      ways = await pp_solver.solve_2hop(paper, paper2)
+      ways = await pp_solver.solve_2hop(paper, paper2, paper2_refids=[])
+      
+      if paper.rid:
+        paper1_refs = await asyncio.wait(list(map(lambda p: fetch_papers([p]), paper.rid)))
+        for paper1 in paper1_refs:
+          if paper1.result():
+            paper1 = paper1.result()[0]
+            if paper2.id in paper1.rid:
+              ways += [(paper.id, paper1.id, paper2.id)]
+
       return list(map(lambda l: l + (auid,), ways))
 
-    async def search_backward_affiliation(afid):
-      authors = await search_authors_by_affiliation(afid)
-      ok_authors = get_intersection(paper.auid, authors)
-      return list(map(lambda a: (paper.id, a, afid, auid), ok_authors))
+    async def search_both_author_and_affiliation(auid2, afid):
+      if await test_author_in_affiliation(auid2, afid):
+        return [(paper.id, auid2, afid, auid)]
+      return []
 
     tasks  = [pa_solver.solve_1hop(paper, auid), pa_solver.solve_2hop(paper, auid, au_papers)]
     tasks += list(map(search_backward_paper, au_papers))
-    tasks += list(map(search_backward_affiliation, affiliations))
+    tasks += [search_both_author_and_affiliation(auid2, afid) for afid in affiliations for auid2 in paper.auid]
     return tasks
 
 async def solve(id1, id2):
+  set_start_time()
   enter_aggressive() # TODO: with syntax
 
   tasks = list(map(asyncio.ensure_future, [get_id_type(id1, id2),
@@ -450,7 +452,7 @@ async def solve(id1, id2):
   done, _ = await asyncio.wait(fs, timeout=time_limit-get_elapsed_time())
   return make_unique(reduce(lambda l1, l2: l1 + l2, map(lambda f: f.result(), done), []))
 
-async def worker(request):
+async def bop_handler(request):
   logger.info(' ')
   d = request.GET
   try:
@@ -459,7 +461,6 @@ async def worker(request):
     logger.warn('invalid request \'%s\'' % request.query_string)
     return web.json_response([])
   logger.info('accepting request with id1=%d id2=%d' % (id1, id2))
-  set_start_time()
   result = await solve(id1, id2)
   logger.info('%d->%d: elapsed_time=%f' % (id1, id2, get_elapsed_time()))
   logger.info('%d->%d: %d path(s) found, %s' % (id1, id2, len(result), str(result)))
@@ -481,7 +482,7 @@ if __name__ == '__main__':
       level=logging.DEBUG)
 
   app = web.Application()
-  app.router.add_route('GET', '/bop', worker)
+  app.router.add_route('GET', '/bop', bop_handler)
 
   logger.info('bop server has started, listening on port %d' % (port))
 

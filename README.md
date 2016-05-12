@@ -60,7 +60,6 @@ You need at least python3.5 and package aiohttp to run.
 * 2332023333 2310280492 (paper -> paper, 1)
 * 2332023333 57898110 (paper -> author, 1)
 * 57898110 2014261844 (author -> author, 26)
-
 * (additional) 2037897188 2058733183 (paper -> paper, 313)
 
 ### URLs
