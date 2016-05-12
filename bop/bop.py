@@ -354,7 +354,6 @@ class ap_solver(object):
 
     tasks = [ap_solver.solve_1hop(auid, paper), ap_solver.solve_2hop(auid, paper, au_ref_paper_ids=au_ref_paper_ids)]
     tasks += list(map(search_forward_paper, au_papers))
-    print(len(affiliations), len(paper.auid))
     tasks += [search_both_affiliation_and_author(afid, auid2) for afid in affiliations for auid2 in paper.auid]
     return tasks
 
