@@ -55,11 +55,13 @@ You need at least python3.5 and package aiohttp to run.
 
 ### Number pairs
 
-* 2251253715 2180737804 (author -> paper)
-* 2147152072 189831743 (paper -> paper)
-* 2332023333 2310280492 (paper -> paper)
-* 2332023333 57898110 (paper -> author)
-* 57898110 2014261844 (author -> author)
+* 2251253715 2180737804 (author -> paper, 14)
+* 2147152072 189831743 (paper -> paper, 18)
+* 2332023333 2310280492 (paper -> paper, 1)
+* 2332023333 57898110 (paper -> author, 1)
+* 57898110 2014261844 (author -> author, 26)
+
+* (additional) 2037897188 2058733183 (paper -> paper, 313)
 
 ### URLs
 
@@ -68,3 +70,4 @@ You need at least python3.5 and package aiohttp to run.
 * http://127.0.0.1:8080/bop?id1=2332023333&id2=2310280492
 * http://127.0.0.1:8080/bop?id1=2332023333&id2=57898110
 * http://127.0.0.1:8080/bop?id1=57898110&id2=2014261844
+* http://127.0.0.1:8080/bop?id1=2037897188&id2=2058733183

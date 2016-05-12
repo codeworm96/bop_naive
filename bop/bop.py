@@ -6,15 +6,17 @@ from functools import reduce
 
 start_time = 0
 aggressive = False
-client_session = aiohttp.ClientSession() # TODO: keep-alive timeout
+client_session = aiohttp.ClientSession()
 logger = logging.getLogger(__name__)
 
 default_attrs = ('Id','F.FId','C.CId','J.JId','AA.AuId','AA.AfId','RId')
 
 # parameters (need adjusting)
-default_count = 50     # TODO: maybe to small
+default_count = 500    # TODO: maybe to small
 time_limit = 300       # TODO: 300 is not a suitable value, see how score is evaluated
 single_time_limit = 1  # time limit on single HTTP request
+
+# TODO: keep-alive pools timeout
 
 def enter_aggressive():
   global aggressive
