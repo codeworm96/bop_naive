@@ -9,8 +9,6 @@ bop.bop.logging.basicConfig(filename='debug.log',
     level=logging.DEBUG)
 
 async def test():
-  print(await bop.bop.fetch_papers(range(200000001,200000051)))
-  exit(0)
   with open('tests.txt', 'r') as f:
     n = int(f.readline())
     for i in range(n):

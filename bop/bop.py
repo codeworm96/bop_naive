@@ -43,6 +43,9 @@ def get_union(b1, b2):
 def make_unique(l):
   return l # list(set(l))
 
+def split_list(l, k):
+  return [l[x:x+k] for x in range(0, len(l), k)]
+
 async def send_http_request(expr, count=None, attributes=None):
   subscription_key = 'f7cc29509a8443c5b3a5e56b0e38b5a6'
   bop_url = 'https://oxfordhk.azure-api.net/academic/v1.0/evaluate'
@@ -131,24 +134,38 @@ async def get_id_type(id1, id2):
     return ty1, ty2
   return (TYPE_AUTHOR, id1), (TYPE_AUTHOR, id2)
 
-# fetch information of papers, paids shall have a reasonable length to avoid HTTP error 'Request URL Too Long'
-async def fetch_papers(paids):
-  expr = ''
-  for paid in paids:
-    tmp = 'Id=%d' % (paid)
-    expr = 'OR(%s,%s)' % (expr, tmp) if expr else tmp
-  resp = await send_http_request(expr, count=len(paids), attributes=default_attrs)
-  if len(resp) != len(paids):
-    logger.error('fetched incomplete paper list of %s' % (str(paids)))
-    return None
-  indices = {}
-  for i in range(len(paids)):
-    indices[paids[i]] = i
-  papers = [None] * len(paids)
-  for entity in resp:
-    paper = parse_paper_json(entity)
-    papers[indices[paper.id]] = paper
-  return papers
+# fetch information of papers
+async def fetch_papers(paper_ids):
+  if paper_ids == []:
+    return []
+  paper_ids_group = split_list(paper_ids, 23) # split list to avoid HTTP error 'Request URL Too Long'
+
+  async def fetch_papers_safe(paper_ids):
+    expr = ''
+    for paper_id in paper_ids:
+      tmp = 'Id=%d' % (paper_id)
+      expr = 'OR(%s,%s)' % (expr, tmp) if expr else tmp
+    resp = await send_http_request(expr, count=len(paper_ids), attributes=default_attrs)
+    if len(resp) != len(paper_ids):
+      logger.error('fetched incomplete paper list of %s' % (str(paper_ids)))
+      return None
+    indices = {}
+    for i in range(len(paper_ids)):
+      indices[paper_ids[i]] = i
+    papers = [None] * len(paper_ids)
+    for entity in resp:
+      paper = parse_paper_json(entity)
+      papers[indices[paper.id]] = paper
+    return papers
+
+  tasks = list(map(asyncio.ensure_future, map(fetch_papers_safe, paper_ids_group)))
+  await asyncio.wait(tasks)
+  result = []
+  for task in tasks:
+    if task.result() == None:
+      return None
+    result += task.result()
+  return result 
 
 # search papers which references this paper
 async def search_papers_by_ref(rid, count=default_count, attrs=default_attrs):
@@ -217,21 +234,8 @@ class pp_solver(object):
       intersection = get_intersection(list1, list2)
       return list(map(lambda x: (paper1.id, x, paper2.id), intersection))
 
-    if paper2_refids == None and isinstance(paper1, int):
-      paper2_refs, paper1 = await asyncio.gather(search_papers_by_ref(paper2.id, attrs=('Id',)), fetch_papers([paper1]))
-      paper2_refids = list(map(lambda p: p.id, paper2_refs))
-      if not paper1:
-        return []
-      else:
-        paper1 = paper1[0]
-    elif paper2_refids == None:
+    if paper2_refids == None:
       paper2_refids = list(map(lambda p: p.id, await search_papers_by_ref(paper2.id, attrs=('Id',))))
-    elif isinstance(paper1, int):
-      paper1 = await fetch_papers([paper1])
-      if not paper1:
-        return []
-      else:
-        paper1 = paper1[0]
     return reduce(lambda a, b: a + b, [find_way(paper1.fid, paper2.fid),
       find_way(paper1.cid, paper2.cid),
       find_way(paper1.jid, paper2.jid),
@@ -256,8 +260,10 @@ class pp_solver(object):
       result = await pp_solver.solve_2hop(paper1, ref_paper, paper2_refids=[])
       return list(map(lambda l: l + (paper2.id,), result))
 
+    paper1_refs = await fetch_papers(paper1.rid)
+
     tasks  = [pp_solver.solve_1hop(paper1, paper2), pp_solver.solve_2hop(paper1, paper2, paper2_refids)]
-    tasks += list(map(search_forward_reference, paper1.rid))
+    tasks += list(map(search_forward_reference, paper1_refs))
     tasks += list(map(search_backward_reference, paper2_refs))
     return tasks
 
@@ -348,6 +354,7 @@ class ap_solver(object):
 
     tasks = [ap_solver.solve_1hop(auid, paper), ap_solver.solve_2hop(auid, paper, au_ref_paper_ids=au_ref_paper_ids)]
     tasks += list(map(search_forward_paper, au_papers))
+    print(len(affiliations), len(paper.auid))
     tasks += [search_both_affiliation_and_author(afid, auid2) for afid in affiliations for auid2 in paper.auid]
     return tasks
 
@@ -379,15 +386,11 @@ class pa_solver(object):
 
     async def search_backward_paper(paper2):
       ways = await pp_solver.solve_2hop(paper, paper2, paper2_refids=[])
-      
-      if paper.rid:
-        paper1_refs = await asyncio.wait(list(map(lambda p: fetch_papers([p]), paper.rid)))
+      paper1_refs = await fetch_papers(paper.rid)
+      if paper1_refs:
         for paper1 in paper1_refs:
-          if paper1.result():
-            paper1 = paper1.result()[0]
-            if paper2.id in paper1.rid:
-              ways += [(paper.id, paper1.id, paper2.id)]
-
+          if paper2.id in paper1.rid:
+            ways += [(paper.id, paper1.id, paper2.id)]
       return list(map(lambda l: l + (auid,), ways))
 
     async def search_both_author_and_affiliation(auid2, afid):
