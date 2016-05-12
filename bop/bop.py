@@ -6,15 +6,15 @@ from functools import reduce
 
 start_time = 0
 aggressive = False
-client_session = aiohttp.ClientSession()
+client_session = aiohttp.ClientSession() # TODO: keep-alive timeout
 logger = logging.getLogger(__name__)
 
 default_attrs = ('Id','F.FId','C.CId','J.JId','AA.AuId','AA.AfId','RId')
 
 # parameters (need adjusting)
-default_count = 50    # TODO: maybe to small
-time_limit = 300      # TODO: 300 is not a suitable value, see how score is evaluated
-single_time_limit = 1 # time limit on single HTTP request
+default_count = 50     # TODO: maybe to small
+time_limit = 300       # TODO: 300 is not a suitable value, see how score is evaluated
+single_time_limit = 1  # time limit on single HTTP request
 
 def enter_aggressive():
   global aggressive
@@ -169,7 +169,7 @@ async def search_authors_by_affiliation(afid, count=default_count):
   resp = await send_http_request('Composite(AA.AfId=%d)' % (afid), count=count, attributes=('Id','AA.AuId','AA.AfId'))
   papers = list(map(parse_paper_json, resp))
   authors = list(map(lambda p: filter_by_afid(p.auid, p.afid), papers))
-  return list(reduce(get_union, authors, set()))
+  return reduce(get_union, authors, set())
 
 # search papers and affiliations which the author attaches to
 async def search_papers_and_affiliations_by_author(auid, count=default_count, attrs=default_attrs):
@@ -179,7 +179,7 @@ async def search_papers_and_affiliations_by_author(auid, count=default_count, at
 
   papers = await search_papers_by_author(auid, count=count, attrs=attrs)
   affiliations = list(map(lambda p: filter_by_auid(p.auid, p.afid), papers))
-  return papers, list(reduce(get_union, affiliations, set()))
+  return papers, reduce(get_union, affiliations, set())
 
 # search affiliations which the author attaches to
 # FIXME: contains duplicate code from search_papers_and_affiliations_by_author, be careful with attributes!
@@ -191,11 +191,13 @@ async def search_affiliations_by_author(auid, count=default_count, au_papers=Non
   if not au_papers:
     au_papers = await search_papers_by_author(auid, count=count, attrs=('Id', 'AA.AuId', 'AA.AfId'))
   affiliations = list(map(lambda p: filter_by_auid(p.auid, p.afid), au_papers))
-  return list(reduce(get_union, affiliations, set()))
+  return reduce(get_union, affiliations, set())
 
 # notes on pp_solver/pa_solver/ap_solver/aa_solver:
 # all solvers provide three static methods `solve_1hop`, `solve_2hop`, `prefetch` and `solve`,
 # the first two do the same thing as its name stated, note that they are primitive up to asynchronous.
+# `prefetch` fetches ALL asynchronous stuffs that `solve_2hop` needs during computation, so it can run
+# concurrently with `get_id_type`.
 # `solve` returns a list of futures (tasks) to be executed (asyncio.wait with timeout) by caller.
 # See pp_solver.solve for an example.
 class pp_solver(object):
@@ -224,11 +226,11 @@ class pp_solver(object):
         return []
       else:
         paper1 = paper1[0]
-    return list(reduce(lambda a, b: a + b, [find_way(paper1.fid, paper2.fid),
+    return reduce(lambda a, b: a + b, [find_way(paper1.fid, paper2.fid),
       find_way(paper1.cid, paper2.cid),
       find_way(paper1.jid, paper2.jid),
       find_way(paper1.auid, paper2.auid),
-      find_way(paper1.rid, paper2_refids)]))
+      find_way(paper1.rid, paper2_refids)])
 
   @staticmethod
   async def prefetch(paper2_id):
@@ -236,7 +238,7 @@ class pp_solver(object):
     return paper2_refs
 
   @staticmethod
-  async def solve(paper1, paper2, prefetched=None):
+  async def solve(paper1, paper2, prefetched=None): # TODO: optimize, batch rids.
     if prefetched != None:
       paper2_refs = prefetched
     else:
@@ -264,13 +266,13 @@ class aa_solver(object):
     return [] # don't be confused, indeed there is no possible path lol
 
   @staticmethod
-  async def solve_2hop(auid1, auid2, au1_papers=None, au2_papers=None):
+  async def solve_2hop(auid1, auid2, au1_papers=None, au2_papers=None): # TODO: this can prefetch
     async def search_by_paper(count=default_count):
       resp = await send_http_request('AND(Composite(AA.AuId=%d),Composite(AA.AuId=%d))' % (auid1, auid2), count=count, attributes=('Id',))
       return list(map(lambda p: (auid1, p['Id'], auid2), resp))
 
     async def search_by_affiliation(count=default_count):
-      # TODO: merge these two queries using primitive OR ?
+      # no await actually!
       aff1, aff2 = await asyncio.gather(search_affiliations_by_author(auid1, au_papers=au1_papers), search_affiliations_by_author(auid2, au_papers=au2_papers))
       intersection = get_intersection(aff1, aff2)
       return list(map(lambda x: (auid1, x, auid2), intersection))
@@ -280,7 +282,7 @@ class aa_solver(object):
 
   @staticmethod
   async def prefetch(auid1, auid2):
-    au1_papers, au2_papers = await asyncio.gather(search_papers_by_author(auid1, attrs=('Id','RId','AA.AuId','AA.AfId')), 
+    au1_papers, au2_papers = await asyncio.gather(search_papers_by_author(auid1, attrs=('Id','RId','AA.AuId','AA.AfId')),
         search_papers_by_author(auid2, attrs=('Id','AA.AuId','AA.AfId')))
     return au1_papers, au2_papers
 
@@ -298,9 +300,11 @@ class aa_solver(object):
         intersection = get_intersection(paper.rid, paper_id2)
         return list(map(lambda id: (auid1, paper.id, id, auid2), intersection))
 
-      return list(reduce(lambda a, b: a+b, list(map(find, au1_papers)), []))
+      return reduce(lambda a, b: a + b, list(map(find, au1_papers)), [])
 
-    return [aa_solver.solve_1hop(auid1, auid2), aa_solver.solve_2hop(auid1, auid2, au1_papers=au1_papers, au2_papers=au2_papers), search_bidirection_papers()]
+    return [aa_solver.solve_1hop(auid1, auid2),
+        aa_solver.solve_2hop(auid1, auid2, au1_papers=au1_papers, au2_papers=au2_papers),
+        search_bidirection_papers()]
 
 class ap_solver(object):
   @staticmethod
@@ -308,7 +312,7 @@ class ap_solver(object):
     return [(auid, paper.id)] if auid in paper.auid else []
 
   @staticmethod
-  async def solve_2hop(auid, paper, count=default_count):
+  async def solve_2hop(auid, paper, count=default_count): # TODO: this can prefetch
     resp = await send_http_request('AND(Composite(AA.AuId=%d),RId=%d)' % (auid, paper.id), count=count, attributes=('Id',))
     return list(map(lambda mp: (auid, mp['Id'], paper.id), resp))
 
@@ -339,6 +343,7 @@ class ap_solver(object):
     tasks += list(map(search_forward_paper, au_papers)) # author->paper->?->paper
     return tasks
 
+# TODO: a bit time-consuming, consider a better strategy
 class pa_solver(object):
   @staticmethod
   async def solve_1hop(paper, auid):
@@ -427,7 +432,7 @@ async def solve(id1, id2):
   fs = await fs
   leave_aggressive()
   done, _ = await asyncio.wait(fs, timeout=time_limit-get_elapsed_time())
-  return make_unique(list(reduce(lambda l1, l2: l1+l2, map(lambda f: f.result(), done), [])))
+  return make_unique(reduce(lambda l1, l2: l1 + l2, map(lambda f: f.result(), done), []))
 
 async def worker(request):
   logger.info(' ')
