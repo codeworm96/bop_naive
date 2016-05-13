@@ -114,7 +114,7 @@ def show_type(ty):
 
 # get the type of one id, return a pair (TYPE_XXX, Paper object if TYPE_PAPER / AA.AuId if TYPE_AUTHOR)
 async def get_id_type(id1, id2):
-  resp = await send_http_request('OR(Id=%d,Id=%d)' % (id1, id2), count=2, attributes=default_attrs+('Ti',))
+  resp = await send_http_request('Or(Id=%d,Id=%d)' % (id1, id2), count=2, attributes=default_attrs+('Ti',))
   if len(resp) == 2:
     entity1, entity2 = resp
     if entity1['Id'] != id1:
@@ -143,7 +143,7 @@ async def fetch_papers(paper_ids):
     expr = ''
     for paper_id in paper_ids:
       tmp = 'Id=%d' % (paper_id)
-      expr = 'OR(%s,%s)' % (expr, tmp) if expr else tmp
+      expr = 'Or(%s,%s)' % (expr, tmp) if expr else tmp
     resp = await send_http_request(expr, count=len(paper_ids), attributes=default_attrs)
     if len(resp) != len(paper_ids):
       logger.error('fetched incomplete paper list of %s' % (str(paper_ids)))
@@ -200,12 +200,12 @@ async def search_affiliations_by_author(auid, count=default_count, au_papers=Non
 
 # search only paper id which cooperated by two authors
 async def search_paper_ids_by_coauthor(auid1, auid2, count=default_count):
-  resp = await send_http_request('AND(Composite(AA.AuId=%d),Composite(AA.AuId=%d))' % (auid1, auid2), count=count, attributes=('Id',))
+  resp = await send_http_request('And(Composite(AA.AuId=%d),Composite(AA.AuId=%d))' % (auid1, auid2), count=count, attributes=('Id',))
   return list(map(lambda p: p['Id'], resp))
 
 # seach only paper id which is referenced by one papar and written by one author
 async def search_paper_ids_by_author_and_ref(auid, paper_id, count=default_count):
-  resp = await send_http_request('AND(Composite(AA.AuId=%d),RId=%d)' % (auid, paper_id), count=count, attributes=('Id',))
+  resp = await send_http_request('And(Composite(AA.AuId=%d),RId=%d)' % (auid, paper_id), count=count, attributes=('Id',))
   return list(map(lambda p: p['Id'], resp))
 
 # test if author in one affiliation
@@ -291,7 +291,8 @@ class aa_solver(object):
       return list(map(lambda id: (auid1, id, auid2), coauthor_paper_ids))
 
     async def search_by_affiliation():
-      aff1, aff2 = await asyncio.gather(search_affiliations_by_author(auid1, au_papers=au1_papers), search_affiliations_by_author(auid2, au_papers=au2_papers))
+      aff1, aff2 = await asyncio.gather(search_affiliations_by_author(auid1, au_papers=au1_papers), 
+          search_affiliations_by_author(auid2, au_papers=au2_papers))
       intersection = get_intersection(aff1, aff2)
       return list(map(lambda x: (auid1, x, auid2), intersection))
 
