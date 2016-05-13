@@ -173,7 +173,7 @@ async def search_papers_by_ref(rid, count=default_count, attrs=default_attrs):
 
 # search papers of this author
 async def search_papers_by_author(auid, count=default_count, attrs=default_attrs):
-  resp = await send_http_request('Composite(AA.AuId=%d)' % (auid), count=count, attributes=default_attrs)
+  resp = await send_http_request('Composite(AA.AuId=%d)' % (auid), count=count, attributes=attrs)
   return list(map(parse_paper_json, resp))
 
 # search papers and affiliations which the author attaches to
