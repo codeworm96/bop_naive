@@ -23,7 +23,7 @@ const getBopUrl = query => libUrl.format({
   query
 });
 const single_time_limit = 10000;
-const aggressive = false;
+let aggressive = false;
 const enter_aggressive = () => aggressive = true;
 const leave_aggressive = () => aggressive = false;
 
@@ -81,6 +81,10 @@ const parse_paper_json = entity => {
 };
 const TYPE_PAPER = 1;
 const TYPE_AUTHOR = 2;
+const show_type = ty => ({
+  [TYPE_PAPER]: 'type-paper',
+  [TYPE_AUTHOR]: 'type-author'
+}[ty] || 'type-unknown');
 const parseTy = entity =>
   'Ti' in entity ? [TYPE_PAPER, parse_paper_json(entity)]
                  : [TYPE_AUTHOR, entity.Id];
@@ -135,7 +139,7 @@ const fetch_papers = paper_ids => {
           throw `fetched incomplete paper list of ${paper_ids}`;
         }
         const indices = {};
-        paper_ids.forEach(paper_id => indices[paper_id] = i);
+        paper_ids.forEach((paper_id, i) => indices[paper_id] = i);
         const papers = Array(paper_ids.length).fill(null);
         resp.forEach(entity => {
           const paper = parse_paper_json(entity);
@@ -257,7 +261,7 @@ const aa_solver = {
     )
       .then(([au1_papers, au2_papers, coauthor_paper_ids]) => {
         const search_bidirection_papers = () => {
-          paper_id2 = new Set(au2_papers.map(p => p.id));
+          const paper_id2 = new Set(au2_papers.map(p => p.id));
           const find = paper =>
             get_intersection(paper.rid, paper_id2)
               .map(id => [auid1, paper.id, id, auid2]);
@@ -387,8 +391,9 @@ const solve = (id1, id2) => {
 
   return Promise.all([
     get_id_type(id1, id2),
+    // We don't really care who wins the race below
     Promise.any(tasks)
-  ]).then(([types, winner]) => {
+  ]).then(([types]) => {
     const task_index = classify(types, null, false);
     if (task_index === 0) {
       logger.error(`type-unknown found id=${id1},${id2}`);
@@ -398,7 +403,7 @@ const solve = (id1, id2) => {
     return Promise.resolve(tasks[task_index - 1])
       .then(prefetched => {
         logger.info(`solving test (${id1},${show_type(types[0][0])}),(${id2},${show_type(types[1][0])})`);
-        return classify(types, prefetched, True);
+        return classify(types, prefetched, true);
       })
       .then(fs => {
         leave_aggressive();
