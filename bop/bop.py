@@ -357,7 +357,6 @@ class ap_solver(object):
     tasks += [search_both_affiliation_and_author(afid, auid2) for afid in affiliations for auid2 in paper.auid]
     return tasks
 
-# TODO: a bit time-consuming, consider a better strategy
 class pa_solver(object):
   @staticmethod
   async def solve_1hop(paper, auid):
