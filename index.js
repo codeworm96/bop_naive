@@ -16,6 +16,7 @@ const httpGet = url => new Promise((resolve, reject) => http.get(url, res => {
 
 const logger = {
   info: (...msg) => console.log(...msg),
+  warn: (...msg) => console.warn(...msg),
   error: (...msg) => console.error(...msg)
 };
 
@@ -420,9 +421,20 @@ const solve = (id1, id2) => {
 /** Server *****************************************************************************/
 http
   .createServer((req, res) => {
-    // TODO: detailed log
     const route = req.url.match(/^\/bop\?id1=(\d+)&id2=(\d+)$/);
-    res.end(route ? JSON.stringify(solve(route[1], route[2])) : null);
+    if (route === null) {
+      logger.warn(`invalid request '${req.url}'`);
+      res.end('[]');
+      return;
+    }
+    const {1: id1, 2: id2} = route;
+    logger.info(`accepting request with id1=${id1} id2=${id2}`);
+    solve(route[1], route[2])
+      .then(result => {
+        logger.info(`${id1}->${id2}: elapsed_time=unknown`);
+        logger.info(`${id1}->${id2}: ${result.length} path(s) found, ${result}`);
+        res.end(JSON.stringify(result));
+      });
   })
   .listen(8080, () => {
     logger.info('bop server has started, listening on port 8080');
