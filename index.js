@@ -424,21 +424,21 @@ const solve = (id1, id2) => {
 /** Server *****************************************************************************/
 http
   .createServer((req, res) => {
-    const route = req.url.match(/^\/bop-node\?id1=(\d+)&id2=(\d+)$/);
+    const route = req.url.match(/^\/bop-node\?id([12])=(\d+)&id[12]=(\d+)/);
     if (route === null) {
       logger.warn(`invalid request '${req.url}'`);
       res.end('[]');
       return;
     }
-    const {1: id1, 2: id2} = route;
+    const [id1, id2] = route[1] === '1' ? [route[2], route[3]] : [route[3], route[2]];
     logger.info(`accepting request with id1=${id1} id2=${id2}`);
-    solve(route[1], route[2])
+    solve(id1, id2)
       .then(result => {
         logger.info(`${id1}->${id2}: elapsed_time=unknown`);
         logger.info(`${id1}->${id2}: ${result.length} path(s) found, ${result}`);
         res.end(JSON.stringify(result));
       });
   })
-  .listen(8080, () => {
-    logger.info('bop server has started, listening on port 8080');
+  .listen(80, '0.0.0.0', () => {
+    logger.info('bop server has started, listening on port 80');
   });
