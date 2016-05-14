@@ -64,19 +64,17 @@ async def send_http_request(expr, count=None, attributes=None):
   return []
 
 class Paper(object):
-  def __init__(self, id, fid, cid, jid, auid, afid, rid):
+  def __init__(self, id, fjcid, auid, afid, rid):
     # WARNING: NEVER tries to make id list a set, we require order on auid and afid
     # TIPS: some fields may be missing because we don't need it
     self.id = id
-    self.fid = fid if fid else []
-    self.cid = cid if cid else []
-    self.jid = jid if jid else []
+    self.fjcid = fjcid if fjcid else []
     self.auid = auid if auid else []
     self.afid = afid if afid else [] # element of afid can be None if not available
     self.rid = rid if rid else []
 
 def parse_paper_json(entity):
-  id, fid, cid, jid, auid, afid, rid = 0, None, None, None, None, None, None
+  id, fid, cid, jid, auid, afid, rid = 0, [], [], [], [], [], []
   id = entity['Id']
   if 'F' in entity:
     fid = [d['FId'] for d in entity['F']]
@@ -89,7 +87,7 @@ def parse_paper_json(entity):
     afid = [d['AfId'] if 'AfId' in d else None for d in entity['AA']]
   if 'RId' in entity:
     rid = entity['RId']
-  return Paper(id, fid, cid, jid, auid, afid, rid)
+  return Paper(id, fid+cid+jid, auid, afid, rid)
 
 TYPE_PAPER, TYPE_AUTHOR = 1, 2
 
@@ -218,11 +216,7 @@ class pp_solver(object):
       intersection = get_intersection(list1, list2)
       return list(map(lambda x: (paper1.id, x, paper2.id), intersection))
 
-    return reduce(lambda a, b: a + b, [find_way(paper1.fid, paper2.fid),
-      find_way(paper1.cid, paper2.cid),
-      find_way(paper1.jid, paper2.jid),
-      find_way(paper1.auid, paper2.auid),
-      find_way(paper1.rid, paper2_refids)])
+    return find_way(paper1.fjcid, paper2.fjcid) + find_way(paper1.auid, paper2.auid) + find_way(paper1.rid, paper2_refids)
 
   @staticmethod
   async def solve(paper1, paper2, prefetched=None):
