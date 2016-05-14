@@ -1,5 +1,6 @@
 import asyncio, aiohttp
 import logging, time
+import urllib
 from aiohttp import web
 from sys import argv, stderr
 from functools import reduce
@@ -13,7 +14,7 @@ logger = logging.getLogger(__name__)
 default_attrs = ('Id','F.FId','C.CId','J.JId','AA.AuId','AA.AfId','RId')
 
 # parameters (need adjusting)
-default_count = 50     # TODO: maybe to small
+default_count = 500    # TODO: maybe to small
 time_limit = 300       # TODO: 300 is not a suitable value, see how score is evaluated
 single_time_limit = 10 # time limit on single HTTP request
 
@@ -56,7 +57,7 @@ async def send_http_request(expr, count=None, attributes=None):
 
   async def shoot():
     async with client_session.get(bop_url, params=params) as resp:
-      # logger.info('sending HTTP request: %s' % resp.url)
+      # logger.info('sending HTTP request: %s' % urllib.parse.unquote(resp.url))
       json = await resp.json()
       if 'entities' in json:
         return json['entities']
@@ -262,7 +263,8 @@ class pp_solver(object):
       result = await pp_solver.solve_2hop(paper1, ref_paper, paper2_refids=[])
       return list(map(lambda l: l + (paper2.id,), result))
 
-    # I believe that this operation is placed at it should be
+    # I believe that this operation is placed at where it should be,
+    # actually this operation is considered critical and should not fail.
     paper1_refs = await fetch_papers(paper1.rid)
 
     tasks  = [pp_solver.solve_1hop(paper1, paper2), pp_solver.solve_2hop(paper1, paper2, paper2_refids=paper2_refids)]
@@ -285,18 +287,18 @@ class aa_solver(object):
 
   @staticmethod
   async def solve_2hop(auid1, auid2, au1_papers=None, au2_papers=None, coauthor_paper_ids=None):
-    async def search_by_paper(coauthor_paper_ids=None):
+    async def search_by_paper(coauthor_paper_ids):
       if coauthor_paper_ids == None:
         coauthor_paper_ids = await search_paper_ids_by_coauthor(auid1, auid2)
       return list(map(lambda id: (auid1, id, auid2), coauthor_paper_ids))
 
-    async def search_by_affiliation():
+    async def search_by_affiliation(au1_papers, au2_papers):
       aff1, aff2 = await asyncio.gather(search_affiliations_by_author(auid1, au_papers=au1_papers), 
           search_affiliations_by_author(auid2, au_papers=au2_papers))
       intersection = get_intersection(aff1, aff2)
       return list(map(lambda x: (auid1, x, auid2), intersection))
 
-    way1, way2 = await asyncio.gather(search_by_paper(coauthor_paper_ids=coauthor_paper_ids), search_by_affiliation())
+    way1, way2 = await asyncio.gather(search_by_paper(coauthor_paper_ids), search_by_affiliation(au1_papers, au2_papers))
     return way1 + way2
 
   @staticmethod
@@ -319,6 +321,7 @@ class aa_solver(object):
         aa_solver.solve_2hop(auid1, auid2, au1_papers=au1_papers, au2_papers=au2_papers, coauthor_paper_ids=coauthor_paper_ids),
         search_bidirection_papers()]
 
+# TODO: test it
 class ap_solver(object):
   @staticmethod
   async def solve_1hop(auid, paper):
@@ -430,6 +433,8 @@ async def solve(id1, id2):
     else:
       return None if wt else 0
 
+  # logger.info('PREFETCH SECTION') 
+
   pendings = tasks
   while True:
     _, pendings = await asyncio.wait(pendings, return_when=asyncio.FIRST_COMPLETED)
@@ -449,8 +454,10 @@ async def solve(id1, id2):
   for task in tasks:
     task.cancel()
   logger.info('solving test (%d,%s),(%d,%s)' % (id1, show_type(types[0][0]), id2, show_type(types[1][0])))
+  # logger.info('INIT SOLVER SECTION')
   fs = await fs
   leave_aggressive()
+  # logger.info('SOLVE ALL TASKS SECTION')
   done, _ = await asyncio.wait(fs, timeout=time_limit-get_elapsed_time())
   return make_unique(reduce(lambda l1, l2: l1 + l2, map(lambda f: f.result(), done), []))
 
