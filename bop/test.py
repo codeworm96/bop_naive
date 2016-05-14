@@ -15,7 +15,9 @@ async def test():
       id1, id2 = map(int, f.readline().split())
       expect = eval(f.readline())
       actual = await bop.bop.solve(id1, id2)
-      if set(actual) == set(expect):
+      expect.sort()
+      actual.sort()
+      if actual == expect:
         print('%d OK' % i)
       else:
         print('%d FAIL' % i)
