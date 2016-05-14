@@ -13,8 +13,8 @@ logger = logging.getLogger(__name__)
 default_attrs = ('Id','F.FId','C.CId','J.JId','AA.AuId','AA.AfId','RId')
 
 # parameters (need adjusting)
-default_count = 500    # TODO: maybe to small
-time_limit = 300       # TODO: 300 is not a suitable value, see how score is evaluated
+default_count = 10000
+time_limit = 10
 
 def set_start_time():
   global start_time
@@ -357,11 +357,17 @@ class pa_solver(object):
     else:
       au_papers, affiliations = await pa_solver.prefetch(auid)
 
-    async def search_backward_paper(paper2):
-      ways = pp_solver.solve_2hop(paper, paper2, [])
+    async def search_backward_paper(paper2_list, paper):
+      # ALRAM: paper1_refs.rid is a set!!!
       paper1_refs = await fetch_papers(paper.rid, attrs=('Id','RId'))
       if paper1_refs:
-        ways += [(paper.id, paper1.id, paper2.id) for paper1 in paper1_refs if paper2.id in paper1.rid]
+        for p in paper1_refs:
+          p.rid = set(p.rid)
+      ways = []
+      for paper2 in paper2_list:
+        ways += pp_solver.solve_2hop(paper, paper2, [])
+        if paper1_refs:
+          ways += [(paper.id, paper1.id, paper2.id) for paper1 in paper1_refs if paper2.id in paper1.rid]
       return list(map(lambda l: l + (auid,), ways))
 
     async def search_both_author_and_affiliation(auid2, afid):
@@ -371,7 +377,7 @@ class pa_solver(object):
 
     tasks_pure = [lambda: pa_solver.solve_1hop(paper, auid), 
         lambda: pa_solver.solve_2hop(paper, auid, au_papers)]
-    tasks_io  = list(map(search_backward_paper, au_papers))
+    tasks_io  = [search_backward_paper(au_papers, paper)]
     tasks_io += [search_both_author_and_affiliation(auid2, afid) for afid in affiliations for auid2 in paper.auid]
     return tasks_pure, tasks_io
 
