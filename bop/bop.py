@@ -48,7 +48,7 @@ def split_list(l, k):
 
 async def send_http_request(expr, count=None, attributes=None):
   subscription_key = 'f7cc29509a8443c5b3a5e56b0e38b5a6'
-  bop_url = 'https://oxfordhk.azure-api.net/academic/v1.0/evaluate'
+  bop_url = 'http://oxfordhk.azure-api.net/academic/v1.0/evaluate'
   params = {'expr': expr, 'subscription-key': subscription_key}
   if count:
     params['count'] = count
@@ -135,7 +135,7 @@ async def get_id_type(id1, id2):
   return (TYPE_AUTHOR, id1), (TYPE_AUTHOR, id2)
 
 # fetch information of papers
-async def fetch_papers(paper_ids):
+async def fetch_papers(paper_ids, attrs=default_attrs):
   if paper_ids == []:
     return []
   paper_ids_group = split_list(paper_ids, 23) # split list to avoid HTTP error 'Request URL Too Long'
@@ -145,7 +145,7 @@ async def fetch_papers(paper_ids):
     for paper_id in paper_ids:
       tmp = 'Id=%d' % (paper_id)
       expr = 'Or(%s,%s)' % (expr, tmp) if expr else tmp
-    resp = await send_http_request(expr, count=len(paper_ids), attributes=default_attrs)
+    resp = await send_http_request(expr, count=len(paper_ids), attributes=attrs)
     if len(resp) != len(paper_ids):
       logger.error('fetched incomplete paper list of %s' % (str(paper_ids)))
       return None
@@ -189,7 +189,7 @@ async def search_papers_and_affiliations_by_author(auid, count=default_count, at
 
 # search affiliations which the author attaches to
 # FIXME: contains duplicate code from search_papers_and_affiliations_by_author, be careful with attributes!
-async def search_affiliations_by_author(auid, count=default_count, au_papers=None):
+async def search_affiliations_by_author(auid, au_papers=None, count=default_count):
   def filter_by_auid(auid_list, afid_list):
     auf_zip = list(filter(lambda x: x[0] == auid and x[1], list(zip(auid_list, afid_list))))
     return [b for (a, b) in auf_zip]
@@ -199,12 +199,7 @@ async def search_affiliations_by_author(auid, count=default_count, au_papers=Non
   affiliations = list(map(lambda p: filter_by_auid(p.auid, p.afid), au_papers))
   return reduce(get_union, affiliations, set())
 
-# search only paper id which cooperated by two authors
-async def search_paper_ids_by_coauthor(auid1, auid2, count=default_count):
-  resp = await send_http_request('And(Composite(AA.AuId=%d),Composite(AA.AuId=%d))' % (auid1, auid2), count=count, attributes=('Id',))
-  return list(map(lambda p: p['Id'], resp))
-
-# seach only paper id which is referenced by one papar and written by one author
+# search only paper id which is referenced by one papar and written by one author
 async def search_paper_ids_by_author_and_ref(auid, paper_id, count=default_count):
   resp = await send_http_request('And(Composite(AA.AuId=%d),RId=%d)' % (auid, paper_id), count=count, attributes=('Id',))
   return list(map(lambda p: p['Id'], resp))
@@ -279,18 +274,16 @@ class aa_solver(object):
 
   @staticmethod
   async def prefetch(auid1, auid2):
-    au1_papers, au2_papers, coauthor_paper_ids = await asyncio.gather(
+    au1_papers, au2_papers = await asyncio.gather(
         search_papers_by_author(auid1, attrs=('Id','RId','AA.AuId','AA.AfId')),
-        search_papers_by_author(auid2, attrs=('Id','AA.AuId','AA.AfId')),
-        search_paper_ids_by_coauthor(auid1, auid2))
-    return au1_papers, au2_papers, coauthor_paper_ids
+        search_papers_by_author(auid2, attrs=('Id','AA.AuId','AA.AfId')))
+    return au1_papers, au2_papers
 
   @staticmethod
-  async def solve_2hop(auid1, auid2, au1_papers=None, au2_papers=None, coauthor_paper_ids=None):
-    async def search_by_paper(coauthor_paper_ids):
-      if coauthor_paper_ids == None:
-        coauthor_paper_ids = await search_paper_ids_by_coauthor(auid1, auid2)
-      return list(map(lambda id: (auid1, id, auid2), coauthor_paper_ids))
+  async def solve_2hop(auid1, auid2, au1_papers=None, au2_papers=None):
+    async def search_by_paper(au1_papers, au2_papers):
+      intersection = get_intersection(map(lambda p: p.id, au1_papers), map(lambda p: p.id, au2_papers))
+      return list(map(lambda id: (auid1, id, auid2), intersection))
 
     async def search_by_affiliation(au1_papers, au2_papers):
       aff1, aff2 = await asyncio.gather(search_affiliations_by_author(auid1, au_papers=au1_papers), 
@@ -298,15 +291,15 @@ class aa_solver(object):
       intersection = get_intersection(aff1, aff2)
       return list(map(lambda x: (auid1, x, auid2), intersection))
 
-    way1, way2 = await asyncio.gather(search_by_paper(coauthor_paper_ids), search_by_affiliation(au1_papers, au2_papers))
+    way1, way2 = await asyncio.gather(search_by_paper(au1_papers, au2_papers), search_by_affiliation(au1_papers, au2_papers))
     return way1 + way2
 
   @staticmethod
   async def solve(auid1, auid2, prefetched=None):
     if prefetched != None:
-      au1_papers, au2_papers, coauthor_paper_ids = prefetched
+      au1_papers, au2_papers = prefetched
     else:
-      au1_papers, au2_papers, coauthor_paper_ids = await aa_solver.prefetch(auid1, auid2)
+      au1_papers, au2_papers = await aa_solver.prefetch(auid1, auid2)
 
     async def search_bidirection_papers():
       paper_id2 = set(list(map(lambda p: p.id, au2_papers)))
@@ -318,7 +311,7 @@ class aa_solver(object):
       return reduce(lambda a, b: a + b, list(map(find, au1_papers)), [])
 
     return [aa_solver.solve_1hop(auid1, auid2),
-        aa_solver.solve_2hop(auid1, auid2, au1_papers=au1_papers, au2_papers=au2_papers, coauthor_paper_ids=coauthor_paper_ids),
+        aa_solver.solve_2hop(auid1, auid2, au1_papers=au1_papers, au2_papers=au2_papers),
         search_bidirection_papers()]
 
 # TODO: test it
@@ -390,7 +383,7 @@ class pa_solver(object):
 
     async def search_backward_paper(paper2):
       ways = await pp_solver.solve_2hop(paper, paper2, paper2_refids=[])
-      paper1_refs = await fetch_papers(paper.rid)
+      paper1_refs = await fetch_papers(paper.rid, attrs=('Id','RId'))
       if paper1_refs:
         ways += [(paper.id, paper1.id, paper2.id) for paper1 in paper1_refs if paper2.id in paper1.rid]
       return list(map(lambda l: l + (auid,), ways))
@@ -490,7 +483,7 @@ if __name__ == '__main__':
       datefmt='%m-%d %H:%M:%S',
       level=logging.DEBUG)
 
-  app = web.Application()
+  app = web.Application(loop=asyncio.get_event_loop())
   app.router.add_route('GET', '/bop', bop_handler)
 
   logger.info('bop server has started, listening on port %d' % (port))
