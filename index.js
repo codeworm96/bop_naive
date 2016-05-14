@@ -424,7 +424,7 @@ const solve = (id1, id2) => {
 /** Server *****************************************************************************/
 http
   .createServer((req, res) => {
-    const route = req.url.match(/^\/bop\?id1=(\d+)&id2=(\d+)$/);
+    const route = req.url.match(/^\/bop-node\?id1=(\d+)&id2=(\d+)$/);
     if (route === null) {
       logger.warn(`invalid request '${req.url}'`);
       res.end('[]');
