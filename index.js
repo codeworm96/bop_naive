@@ -28,7 +28,7 @@ const enter_aggressive = () => aggressive = true;
 const leave_aggressive = () => aggressive = false;
 
 /** Default settings * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
-const default_count = 50;
+const default_count = 500;
 const default_attrs = ['Id', 'F.FId', 'C.CId', 'J.JId', 'AA.AuId', 'AA.AfId', 'RId'];
 
 /** Utilities for Arrays * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
@@ -236,22 +236,22 @@ const aa_solver = {
   ]),
   solve_1hop: () => [],
   solve_2hop: (auid1, auid2, {au1_papers=null, au2_papers=null, coauthor_paper_ids=null}={}) => {
-    const search_by_paper = ({coauthor_paper_ids=null}={}) =>
+    const search_by_paper = coauthor_paper_ids =>
       Promise.resolve(
         coauthor_paper_ids === null ?
           search_paper_ids_by_coauthor(auid1, auid2) :
           coauthor_paper_ids
       )
         .then(coauthor_paper_ids => coauthor_paper_ids.map(id => [auid1, id, auid2]));
-    const search_by_affiliation = () =>
+    const search_by_affiliation = (au1_papers, au2_papers) =>
       Promise.all([
         search_affiliations_by_author(auid1, {au_papers: au1_papers}),
         search_affiliations_by_author(auid2, {au_papers: au2_papers})
       ])
         .then(([aff1, aff2]) => get_intersection(aff1, aff2).map(x => [auid1, x, auid2]));
     return Promise.all([
-      search_by_paper({coauthor_paper_ids}),
-      search_by_affiliation()
+      search_by_paper(coauthor_paper_ids),
+      search_by_affiliation(au1_papers, au2_papers)
     ])
       .then(([way1, way2]) => way1.concat(way2));
   },
