@@ -15,9 +15,9 @@ const httpGet = url => new Promise((resolve, reject) => http.get(url, res => {
 }).on('error', reject));
 
 const logger = {
-  info: (...msg) => console.log(...msg),
-  warn: (...msg) => console.warn(...msg),
-  error: (...msg) => console.error(...msg)
+  info: msg => console.log(msg),
+  warn: msg => console.warn(msg),
+  error: msg => console.error(msg)
 };
 
 /** Parameters and Utilities ***********************************************************/
