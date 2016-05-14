@@ -22,10 +22,6 @@ const getBopUrl = query => libUrl.format({
   pathname: 'academic/v1.0/evaluate',
   query
 });
-const single_time_limit = 10000;
-let aggressive = false;
-const enter_aggressive = () => aggressive = true;
-const leave_aggressive = () => aggressive = false;
 
 /** Default settings * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 const default_count = 500;
@@ -102,11 +98,7 @@ const send_http_request = (expr, {count, attributes}={}) => {
   const requestUrl = getBopUrl(params);
   const shoot = () => httpGet(requestUrl).get('entities');
 
-  return aggressive ? Promise.race([
-    shoot(),
-    shoot(),
-    shoot()
-  ]) : shoot().timeout(single_time_limit);
+  return Promise.race([shoot(), shoot(), shoot()]);
 };
 
 const get_id_type = (id1, id2) =>
@@ -124,7 +116,7 @@ const get_id_type = (id1, id2) =>
       return [[TYPE_AUTHOR, id1], [TYPE_AUTHOR, id2]];
     });
 
-const fetch_papers = paper_ids => {
+const fetch_papers = (paper_ids, {attrs=default_attrs}={}) => {
   if (paper_ids.length === 0) {
     return Promise.resolve([]);
   }
@@ -132,7 +124,7 @@ const fetch_papers = paper_ids => {
   const fetch_papers_safe = paper_ids =>
     send_http_request(
       paper_ids.map(a => `Id=${a}`).reduce((a, b) => `Or(${a},${b})`),
-      {count: paper_ids.length, attributes: default_attrs}
+      {count: paper_ids.length, attributes: attrs}
     )
       .then(resp => {
         if (resp.length !== paper_ids.length) {
@@ -170,17 +162,11 @@ const search_papers_and_affiliations_by_author = (auid, {count=default_count, at
       get_union_all(papers.map(p => filter_by_auid(p.auid, p.afid)))
     ]);
 };
-const search_affiliations_by_author = (auid, {count=default_count, au_papers=null}={}) => {
+const search_affiliations_by_author = (auid, au_papers, {count=default_count}={}) => {
   const filter_by_auid = (auid_list, afid_list) =>
     afid_list.filter((afid, i) => afid && auid_list[i] == auid);
-  return Promise.resolve(
-    au_papers || search_papers_by_author(auid, {count, attrs: ['Id', 'AA.AuId', 'AA.AfId']})
-  )
-    .then(au_papers => get_union_all(au_papers.map(p => filter_by_auid(p.auid, p.afid))));
+  return get_union_all(au_papers.map(p => filter_by_auid(p.auid, p.afid)));
 };
-const search_paper_ids_by_coauthor = (auid1, auid2, {count=default_count}={}) =>
-  send_http_request(`And(Composite(AA.AuId=${auid1}),Composite(AA.AuId=${auid2}))`, {count, attributes: ['Id']})
-    .then(resp => resp.map(p => p.Id));
 const search_paper_ids_by_author_and_ref = (auid, paper_id, {count=default_count}={}) =>
   send_http_request(`And(Composite(AA.AuId=${auid}),RId=${paper_id})`, {count, attributes: ['Id']})
     .then(resp => resp.map(p => p.Id));
@@ -192,74 +178,73 @@ const test_author_in_affiliation = (auid, afid) =>
 const pp_solver = {
   prefetch: search_papers_by_ref,
   solve_1hop: (paper1, paper2) => paper1.rid.includes(paper2.id) ? [[paper1.id, paper2.id]] : [],
-  solve_2hop: (paper1, paper2, {paper2_refids=null}={}) => {
+  solve_2hop: (paper1, paper2, paper2_refids) => {
     const find_way = (list1, list2) =>
       get_intersection(list1, list2).map(x => [paper1.id, x, paper2.id]);
-
-    return Promise.resolve(
-      paper2_refids === null ? search_papers_by_ref(paper2.id, {attrs: ['Id']}).call('map', p => p.id) : paper2_refids
-    )
-      .then(paper2_refids => flatten([
-        find_way(paper1.fid, paper2.fid),
-        find_way(paper1.cid, paper2.cid),
-        find_way(paper1.jid, paper2.jid),
-        find_way(paper1.auid, paper2.auid),
-        find_way(paper1.rid, paper2_refids)
-      ]));
+    return flatten([
+      find_way(paper1.fid, paper2.fid),
+      find_way(paper1.cid, paper2.cid),
+      find_way(paper1.jid, paper2.jid),
+      find_way(paper1.auid, paper2.auid),
+      find_way(paper1.rid, paper2_refids)
+    ]);
   },
   solve: (paper1, paper2, prefetched=null) =>
-    Promise.all(
-      Promise.resolve(prefetched === null ? pp_solver.prefetch(paper2.id) : prefetched),
-      fetch_papers(paper1.rid)
-    )
-      .then(([paper2_refs, paper1_refs]) => {
+    Promise.resolve(prefetched === null ? pp_solver.prefetch(paper2.id) : prefetched)
+      .then(paper2_refs => {
         const paper2_refids = mapGet('id', paper2_refs);
-        const search_forward_reference = ref_paper =>
-          pp_solver.solve_2hop(ref_paper, paper2, {paper2_refids})
-            .then(result => result.map(l => [paper1.id].concat(l)));
+        const search_forward_reference = paper1_refids =>
+          fetch_papers(paper1_refids)
+            .then(paper1_refs =>
+              flatten(
+                paper1_refs.map(
+                  ref_paper => pp_solver.solve_2hop(ref_paper, paper2, paper2_refids)
+                )
+              ).map(l => [paper1.id].concat(l))
+            );
         const search_backward_reference = ref_paper =>
-          pp_solver.solve_2hop(paper1, ref_paper, {paper2_refids: []})
-            .then(result => result.map(l => l.concat([paper2.id])));
+          pp_solver.solve_2hop(paper1, ref_paper, []).map(l => l.concat([paper2.id]));
         return [
-          pp_solver.solve_1hop(paper1, paper2),
-          pp_solver.solve_2hop(paper1, paper2, {paper2_refids})
-        ]
-          .concat(paper1_refs.map(search_forward_reference))
-          .concat(paper2_refs.map(search_backward_reference));
+          // Pure Tasks
+          [
+            () => pp_solver.solve_1hop(paper1, paper2),
+            () => pp_solver.solve_2hop(paper1, paper2, paper2_refids)
+          ].concat(
+            paper2_refs.map(
+              p => () => search_backward_reference(p)
+            )
+          ),
+          // IO Tasks
+          [search_forward_reference(paper1.rid)]
+        ];
       })
 };
 const aa_solver = {
   prefetch: (auid1, auid2) => Promise.all([
     search_papers_by_author(auid1, {attrs: ['Id','RId','AA.AuId','AA.AfId']}),
-    search_papers_by_author(auid2, {attrs: ['Id','AA.AuId','AA.AfId']}),
-    search_paper_ids_by_coauthor(auid1, auid2)
+    search_papers_by_author(auid2, {attrs: ['Id','AA.AuId','AA.AfId']})
   ]),
   solve_1hop: () => [],
-  solve_2hop: (auid1, auid2, {au1_papers=null, au2_papers=null, coauthor_paper_ids=null}={}) => {
-    const search_by_paper = coauthor_paper_ids =>
-      Promise.resolve(
-        coauthor_paper_ids === null ?
-          search_paper_ids_by_coauthor(auid1, auid2) :
-          coauthor_paper_ids
-      )
-        .then(coauthor_paper_ids => coauthor_paper_ids.map(id => [auid1, id, auid2]));
+  solve_2hop: (auid1, auid2, au1_papers, au2_papers) => {
+    const search_by_paper = (au1_papers, au2_papers) =>
+      get_intersection(
+        au1_papers.map(p => p.id),
+        au2_papers.map(p => p.id)
+      ).map(id => [auid1, id, auid2]);
     const search_by_affiliation = (au1_papers, au2_papers) =>
-      Promise.all([
-        search_affiliations_by_author(auid1, {au_papers: au1_papers}),
-        search_affiliations_by_author(auid2, {au_papers: au2_papers})
-      ])
-        .then(([aff1, aff2]) => get_intersection(aff1, aff2).map(x => [auid1, x, auid2]));
-    return Promise.all([
-      search_by_paper(coauthor_paper_ids),
+      get_intersection(
+        search_affiliations_by_author(auid1, au1_papers),
+        search_affiliations_by_author(auid2, au2_papers)
+      ).map(id => [auid1, id, auid2]);
+    return search_by_paper(au1_papers, au2_papers).concat(
       search_by_affiliation(au1_papers, au2_papers)
-    ])
-      .then(([way1, way2]) => way1.concat(way2));
+    );
   },
   solve: (auid1, auid2, {prefetched=null}={}) =>
     Promise.resolve(
       prefetched !== null ? prefetched : aa_solver.prefetch(auid1, auid2)
     )
-      .then(([au1_papers, au2_papers, coauthor_paper_ids]) => {
+      .then(([au1_papers, au2_papers]) => {
         const search_bidirection_papers = () => {
           const paper_id2 = new Set(au2_papers.map(p => p.id));
           const find = paper =>
@@ -268,9 +253,14 @@ const aa_solver = {
           return flatten(au1_papers.map(find));
         };
         return [
-          aa_solver.solve_1hop(auid1, auid2),
-          aa_solver.solve_2hop(auid1, auid2, {au1_papers, au2_papers, coauthor_paper_ids}),
-          search_bidirection_papers()
+          // Pure Tasks
+          [
+            () => aa_solver.solve_1hop(auid1, auid2),
+            () => aa_solver.solve_2hop(auid1, auid2, au1_papers, au2_papers),
+            () => search_bidirection_papers()
+          ],
+          // IO Tasks
+          []
         ];
       })
 };
@@ -282,9 +272,8 @@ const ap_solver = {
   ]),
   solve_1hop: (auid, paper) =>
     paper.auid.includes(auid) ? [[auid, paper.id]] : [],
-  solve_2hop: (auid, paper, {au_ref_paper_ids=null}={}) =>
-    (au_ref_paper_ids || search_paper_ids_by_author_and_ref(auid, paper.id))
-      .map(id => [auid, id, paper.id]),
+  solve_2hop: (auid, paper, au_ref_paper_ids) =>
+    au_ref_paper_ids.map(id => [auid, id, paper.id]),
   solve: (auid, paper, {prefetched=null}={}) =>
     Promise.resolve(
       prefetched !== null ? prefetched :
@@ -293,47 +282,46 @@ const ap_solver = {
       .then(([[au_papers, affiliations], paper_refs, au_ref_paper_ids]) => {
         const paper_refids = paper_refs.map(p => p.id);
         const search_forward_paper = paper1 =>
-          pp_solver.solve_2hop(paper1, paper, {paper2_refids: paper_refids})
-            .then(ways => ways.map(l => [auid].concat(l)));
+          pp_solver.solve_2hop(paper1, paper, paper_refids)
+            .map(l => [auid].concat(l));
         const search_both_affiliation_and_author = (afid, auid2) =>
           test_author_in_affiliation(auid2, afid)
             .then(bool => bool ? [[auid, afid, auid2, paper.id]] : []);
         return [
-          ap_solver.solve_1hop(auid, paper),
-          ap_solver.solve_2hop(auid, paper, {au_ref_paper_ids})
-        ]
-          .concat(au_papers.map(search_forward_paper))
-          .concat(mapDouble(
+          // Pure Tasks
+          [
+            () => ap_solver.solve_1hop(auid, paper),
+            () => ap_solver.solve_2hop(auid, paper, au_ref_paper_ids)
+          ].concat(au_papers.map(
+            p => () => search_forward_paper(p)
+          )),
+          // IO Tasks
+          mapDouble(
             affiliations, paper.auid,
             (afid, auid2) => search_both_affiliation_and_author(afid, auid2)
-          ));
+          )
+        ];
       })
 };
 const pa_solver = {
   prefetch: search_papers_and_affiliations_by_author,
   solve_1hop: (paper, auid) => paper.auid.includes(auid) ? [[paper.id, auid]] : [],
-  solve_2hop: (paper, auid, {au_papers=null}={}) =>
-    Promise.resolve(
-      au_papers || search_papers_by_author(auid, {attrs: ['Id']})
-    )
-      .then(au_papers => {
-        const rid_set = new Set(paper.rid);
-        return au_papers
-          .filter(p => rid_set.has(p.id))
-          .map(mp => [paper.id, mp.id, auid]);
-      }),
+  solve_2hop: (paper, auid, au_papers) => {
+    const rid_set = new Set(paper.rid);
+    return au_papers
+      .filter(p => rid_set.has(p.id))
+      .map(mp => [paper.id, mp.id, auid]);
+  },
   solve: (paper, auid, {prefetched=null}={}) =>
     Promise.resolve(
       prefetched !== null ? prefetched :
       pa_solver.prefetch(auid)
     )
       .then(([au_papers, affiliations]) => {
-        const search_backward_paper = paper2 =>
-          Promise.all([
-            pp_solver.solve_2hop(paper, paper2, {paper2_refids: []}),
-            fetch_papers(paper.rid)
-          ])
-            .then(([ways, paper1_refs]) => {
+        const search_backward_paper = paper2 => {
+          const ways = pp_solver.solve_2hop(paper, paper2, []);
+          return fetch_papers(paper.rid, {attrs: ['Id', 'RId']})
+            .then(paper1_refs => {
               if (paper1_refs) {
                 Array.prototype.push.apply(
                   ways,
@@ -344,25 +332,30 @@ const pa_solver = {
               }
               return ways.map(l => l.concat([auid]));
             });
+        };
         const search_both_author_and_affiliation = (auid2, afid) =>
           test_author_in_affiliation(auid2, afid)
             .then(bool => bool ? [[paper.id, auid2, afid, auid]] : []);
         return [
-          pa_solver.solve_1hop(paper, auid),
-          pa_solver.solve_2hop(paper, auid, {au_papers})
-        ]
-          .concat(au_papers.map(search_backward_paper))
-          .concat(mapDouble(
-            affiliations, paper.auid,
-            (afid, auid2) => search_both_author_and_affiliation(auid2, afid)
-          ));
+          // Pure Tasks
+          [
+            () => pa_solver.solve_1hop(paper, auid),
+            () => pa_solver.solve_2hop(paper, auid, au_papers)
+          ],
+          // IO Tasks
+          au_papers.map(search_backward_paper).concat(
+            mapDouble(
+              affiliations, paper.auid,
+              (afid, auid2) => search_both_author_and_affiliation(auid2, afid)
+            )
+          )
+        ];
       })
 };
 
 /** Core *******************************************************************************/
 const solve = (id1, id2) => {
   // TODO: set_start_time();
-  enter_aggressive();
 
   const tasks = [
     pp_solver.prefetch(id2),
@@ -405,12 +398,17 @@ const solve = (id1, id2) => {
         logger.info(`solving test (${id1},${show_type(types[0][0])}),(${id2},${show_type(types[1][0])})`);
         return classify(types, prefetched, true);
       })
-      .then(fs => {
-        leave_aggressive();
-        // TODO: set time limit
-        return Promise.all(fs);
-      })
-      .then(done => make_unique(flatten(done)));
+      .then(([tasks_pure, tasks_io]) => Promise.all([
+        new Promise(resolve => {
+          const result = [];
+          tasks_pure.forEach(task => result.push(...task()));
+          resolve(result);
+        }),
+        Promise.all(tasks_io)
+      ]))
+      .then(([pure_result, io_done]) =>
+        make_unique(pure_result.concat(flatten(io_done)))
+      );
   });
 };
 
