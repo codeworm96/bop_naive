@@ -162,7 +162,7 @@ const search_papers_and_affiliations_by_author = (auid, {count=default_count, at
       get_union_all(papers.map(p => filter_by_auid(p.auid, p.afid)))
     ]);
 };
-const search_affiliations_by_author = (auid, au_papers, {count=default_count}={}) => {
+const search_affiliations_by_author = (auid, au_papers) => {
   const filter_by_auid = (auid_list, afid_list) =>
     afid_list.filter((afid, i) => afid && auid_list[i] == auid);
   return get_union_all(au_papers.map(p => filter_by_auid(p.auid, p.afid)));
@@ -390,7 +390,6 @@ const solve = (id1, id2) => {
     const task_index = classify(types, null, false);
     if (task_index === 0) {
       logger.error(`type-unknown found id=${id1},${id2}`);
-      leave_aggressive();
       return [];
     }
     return Promise.resolve(tasks[task_index - 1])
