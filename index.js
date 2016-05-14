@@ -68,9 +68,14 @@ const get_union_all = lists => [...lists.reduce(get_union, [])];
 const parse_paper_json = entity => {
   const paper = {
     id: entity.Id,
-    fid: 'F' in entity ? mapGet('FId', entity.F) : [],
-    cid: 'C' in entity ? [entity.C.CId] : [],
-    jid: 'J' in entity ? [entity.J.JId] : [],
+    fjcid: flatten([
+      // fid
+      'F' in entity ? mapGet('FId', entity.F) : [],
+      // cid
+      'C' in entity ? [entity.C.CId] : [],
+      // jid
+      'J' in entity ? [entity.J.JId] : []
+    ]),
     rid: 'RId' in entity ? entity.RId : []
   };
   if ('AA' in entity) {
@@ -189,9 +194,7 @@ const pp_solver = {
     const find_way = (list1, list2) =>
       get_intersection(list1, list2).map(x => [paper1.id, x, paper2.id]);
     return flatten([
-      find_way(paper1.fid, paper2.fid),
-      find_way(paper1.cid, paper2.cid),
-      find_way(paper1.jid, paper2.jid),
+      find_way(paper1.fjcid, paper2.fjcid),
       find_way(paper1.auid, paper2.auid),
       find_way(paper1.rid, paper2_refids)
     ]);
