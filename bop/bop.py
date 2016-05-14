@@ -38,7 +38,7 @@ def split_list(l, k):
 
 async def send_http_request(expr, count=None, attributes=None):
   subscription_key = 'f7cc29509a8443c5b3a5e56b0e38b5a6'
-  bop_url = 'https://oxfordhk.azure-api.net/academic/v1.0/evaluate'
+  bop_url = 'http://oxfordhk.azure-api.net/academic/v1.0/evaluate'
   params = {'expr': expr, 'subscription-key': subscription_key}
   if count:
     params['count'] = count
