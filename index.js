@@ -68,14 +68,14 @@ const get_union_all = lists => [...lists.reduce(get_union, [])];
 const parse_paper_json = entity => {
   const paper = {
     id: entity.Id,
-    fjcid: flatten([
+    fjcid: [
       // fid
-      'F' in entity ? mapGet('FId', entity.F) : [],
+      ...('F' in entity ? mapGet('FId', entity.F) : []),
       // cid
-      'C' in entity ? [entity.C.CId] : [],
+      ...('C' in entity ? [entity.C.CId] : []),
       // jid
-      'J' in entity ? [entity.J.JId] : []
-    ]),
+      ...('J' in entity ? [entity.J.JId] : [])
+    ],
     rid: 'RId' in entity ? entity.RId : []
   };
   if ('AA' in entity) {
@@ -193,11 +193,11 @@ const pp_solver = {
   solve_2hop: (paper1, paper2, paper2_refids) => {
     const find_way = (list1, list2) =>
       get_intersection(list1, list2).map(x => [paper1.id, x, paper2.id]);
-    return flatten([
-      find_way(paper1.fjcid, paper2.fjcid),
-      find_way(paper1.auid, paper2.auid),
-      find_way(paper1.rid, paper2_refids)
-    ]);
+    return [
+      ...find_way(paper1.fjcid, paper2.fjcid),
+      ...find_way(paper1.auid, paper2.auid),
+      ...find_way(paper1.rid, paper2_refids)
+    ];
   },
   solve: (paper1, paper2, {prefetched=null}={}) =>
     Promise.resolve(prefetched === null ? pp_solver.prefetch(paper2.id) : prefetched)
