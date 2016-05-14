@@ -322,7 +322,7 @@ const pa_solver = {
           const ways = pp_solver.solve_2hop(paper, paper2, []);
           return fetch_papers(paper.rid, {attrs: ['Id', 'RId']})
             .then(paper1_refs => {
-              if (paper1_refs) {
+              if (paper1_refs && paper1_refs.length) {
                 Array.prototype.push.apply(
                   ways,
                   paper1_refs
