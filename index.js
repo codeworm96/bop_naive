@@ -5,7 +5,13 @@ const Promise = require('bluebird');
 
 const httpGet = url => new Promise((resolve, reject) => http.get(url, res => {
   res.setEncoding('utf8');
-  res.on('data', chunk => resolve(JSON.parse(chunk)));
+  let raw = '';
+  res.on('data', chunk => {
+    raw += chunk.toString();
+  });
+  res.on('end', () => {
+    resolve(JSON.parse(raw));
+  });
 }).on('error', reject));
 
 const logger = {
@@ -17,7 +23,7 @@ const logger = {
 /** Configurations * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 const subscription_key = 'f7cc29509a8443c5b3a5e56b0e38b5a6'
 const getBopUrl = query => libUrl.format({
-  protocol: 'https',
+  protocol: 'http',
   host: 'oxfordhk.azure-api.net',
   pathname: 'academic/v1.0/evaluate',
   query
@@ -29,7 +35,7 @@ const default_attrs = ['Id', 'F.FId', 'C.CId', 'J.JId', 'AA.AuId', 'AA.AfId', 'R
 
 /** Utilities for Arrays * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 const mapGet = (prop, array) => array.map(el => el[prop]);
-const flatten = s => s.reduce((a, b) => a.concat(b));
+const flatten = s => s.reduce((a, b) => a.concat(b), []);
 const split_list = (list, sub) => {
   const length = list.length;
   const count = length / sub;
@@ -189,7 +195,7 @@ const pp_solver = {
       find_way(paper1.rid, paper2_refids)
     ]);
   },
-  solve: (paper1, paper2, prefetched=null) =>
+  solve: (paper1, paper2, {prefetched=null}={}) =>
     Promise.resolve(prefetched === null ? pp_solver.prefetch(paper2.id) : prefetched)
       .then(paper2_refs => {
         const paper2_refids = mapGet('id', paper2_refs);
@@ -246,7 +252,7 @@ const aa_solver = {
     )
       .then(([au1_papers, au2_papers]) => {
         const search_bidirection_papers = () => {
-          const paper_id2 = new Set(au2_papers.map(p => p.id));
+          const paper_id2 = [...new Set(au2_papers.map(p => p.id))];
           const find = paper =>
             get_intersection(paper.rid, paper_id2)
               .map(id => [auid1, paper.id, id, auid2]);
