@@ -104,23 +104,31 @@ def show_type(ty):
 # get the type of one id, return a pair (TYPE_XXX, Paper object if TYPE_PAPER / AA.AuId if TYPE_AUTHOR)
 async def get_id_type(id1, id2):
   resp = await send_http_request('Or(Id=%d,Id=%d)' % (id1, id2), count=2, attributes=default_attrs+('Ti',))
-  if len(resp) == 2:
-    entity1, entity2 = resp
-    if entity1['Id'] != id1:
-      entity1, entity2 = entity2, entity1
-    ty1 = (TYPE_PAPER, parse_paper_json(entity1)) if 'Ti' in entity1 else (TYPE_AUTHOR, id1)
-    ty2 = (TYPE_PAPER, parse_paper_json(entity2)) if 'Ti' in entity2 else (TYPE_AUTHOR, id2)
-    return ty1, ty2
-  if len(resp) == 1:
-    entity = resp[0]
-    ty1 = (TYPE_AUTHOR, id1)
-    ty2 = (TYPE_AUTHOR, id2)
-    if entity['Id'] == id1:
-      ty1 = (TYPE_PAPER, parse_paper_json(entity))
-    else:
-      ty2 = (TYPE_PAPER, parse_paper_json(entity))
-    return ty1, ty2
-  return (TYPE_AUTHOR, id1), (TYPE_AUTHOR, id2)
+  if id1 == id2:
+    if len(resp) == 1:
+      entity = resp[0]
+      if 'Ti' in entity:
+        paper = parse_paper_json(entity)
+        return (TYPE_PAPER, paper), (TYPE_PAPER, paper)
+    return (TYPE_AUTHOR, id1), (TYPE_AUTHOR, id2)
+  else:
+    if len(resp) == 2:
+      entity1, entity2 = resp
+      if entity1['Id'] != id1:
+        entity1, entity2 = entity2, entity1
+      ty1 = (TYPE_PAPER, parse_paper_json(entity1)) if 'Ti' in entity1 else (TYPE_AUTHOR, id1)
+      ty2 = (TYPE_PAPER, parse_paper_json(entity2)) if 'Ti' in entity2 else (TYPE_AUTHOR, id2)
+      return ty1, ty2
+    if len(resp) == 1:
+      entity = resp[0]
+      ty1 = (TYPE_AUTHOR, id1)
+      ty2 = (TYPE_AUTHOR, id2)
+      if entity['Id'] == id1:
+        ty1 = (TYPE_PAPER, parse_paper_json(entity))
+      else:
+        ty2 = (TYPE_PAPER, parse_paper_json(entity))
+      return ty1, ty2
+    return (TYPE_AUTHOR, id1), (TYPE_AUTHOR, id2)
 
 # fetch information of papers
 async def fetch_papers(paper_ids, attrs=default_attrs):
