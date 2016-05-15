@@ -13,8 +13,8 @@ logger = logging.getLogger(__name__)
 default_attrs = ('Id','F.FId','C.CId','J.JId','AA.AuId','AA.AfId','RId')
 
 # parameters (need adjusting)
-default_count = 10000
-time_limit = 10
+default_count = 50000
+time_limit = 8
 
 def set_start_time():
   global start_time
@@ -36,7 +36,7 @@ def make_unique(l):
 def split_list(l, k):
   return [l[x:x+k] for x in range(0, len(l), k)]
 
-async def send_http_request(expr, count=None, attributes=None):
+async def send_http_request(expr, count=None, attributes=None, critical=True):
   subscription_key = 'f7cc29509a8443c5b3a5e56b0e38b5a6'
   bop_url = 'http://oxfordhk.azure-api.net/academic/v1.0/evaluate'
   params = {'expr': expr, 'subscription-key': subscription_key}
@@ -47,7 +47,7 @@ async def send_http_request(expr, count=None, attributes=None):
 
   async def shoot():
     async with client_session.get(bop_url, params=params) as resp:
-      # logger.info('sending HTTP request: %s' % urllib.parse.unquote(resp.url))
+      logger.info('sending HTTP request: %s' % urllib.parse.unquote(resp.url))
       json = await resp.json()
       if 'entities' in json:
         return json['entities']
@@ -55,7 +55,10 @@ async def send_http_request(expr, count=None, attributes=None):
         logger.error('invalid response from server')
         return []
 
-  done, pending = await asyncio.wait([shoot()]*3, return_when=asyncio.FIRST_COMPLETED)
+  if critical:
+    done, pending = await asyncio.wait([shoot()]*3, return_when=asyncio.FIRST_COMPLETED)
+  else:
+    done, pending = await asyncio.wait([shoot()], timeout=time_limit-2-get_elapsed_time())
   for future in pending:
     future.cancel()
   done = list(done)
@@ -189,7 +192,7 @@ async def search_paper_ids_by_author_and_ref(auid, paper_id, count=default_count
 
 # test if author in one affiliation
 async def test_author_in_affiliation(auid, afid):
-  resp = await send_http_request('Composite(And(AA.AuId=%d,AA.AfId=%d))' % (auid, afid), attributes=('Id',), count=1)
+  resp = await send_http_request('Composite(And(AA.AuId=%d,AA.AfId=%d))' % (auid, afid), attributes=('Id',), count=1, critical=False)
   return len(resp) == 1
 
 # notes on pp_solver/pa_solver/ap_solver/aa_solver:
