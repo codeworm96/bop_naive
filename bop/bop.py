@@ -6,7 +6,6 @@ from sys import argv, stderr
 from functools import reduce
 
 start_time = 0
-aggressive = False
 # TODO: keep-alive pools timeout
 client_session = aiohttp.ClientSession()
 logger = logging.getLogger(__name__)
@@ -14,17 +13,8 @@ logger = logging.getLogger(__name__)
 default_attrs = ('Id','F.FId','C.CId','J.JId','AA.AuId','AA.AfId','RId')
 
 # parameters (need adjusting)
-default_count = 500    # TODO: maybe to small
-time_limit = 300       # TODO: 300 is not a suitable value, see how score is evaluated
-single_time_limit = 10 # time limit on single HTTP request
-
-def enter_aggressive():
-  global aggressive
-  aggressive = True
-
-def leave_aggressive():
-  global aggressive
-  aggressive = False
+default_count = 10000
+time_limit = 10
 
 def set_start_time():
   global start_time
@@ -65,10 +55,7 @@ async def send_http_request(expr, count=None, attributes=None):
         logger.error('invalid response from server')
         return []
 
-  if aggressive:
-    done, pending = await asyncio.wait([shoot()]*3, return_when=asyncio.FIRST_COMPLETED)
-  else:
-    done, pending = await asyncio.wait([shoot()], timeout=single_time_limit)
+  done, pending = await asyncio.wait([shoot()]*3, return_when=asyncio.FIRST_COMPLETED)
   for future in pending:
     future.cancel()
   done = list(done)
@@ -187,13 +174,11 @@ async def search_papers_and_affiliations_by_author(auid, count=default_count, at
 
 # search affiliations which the author attaches to
 # FIXME: contains duplicate code from search_papers_and_affiliations_by_author, be careful with attributes!
-async def search_affiliations_by_author(auid, au_papers=None, count=default_count):
+def search_affiliations_by_author(auid, au_papers, count=default_count):
   def filter_by_auid(auid_list, afid_list):
     auf_zip = list(filter(lambda x: x[0] == auid and x[1], list(zip(auid_list, afid_list))))
     return [b for (a, b) in auf_zip]
 
-  if not au_papers:
-    au_papers = await search_papers_by_author(auid, count=count, attrs=('Id', 'AA.AuId', 'AA.AfId'))
   affiliations = list(map(lambda p: filter_by_auid(p.auid, p.afid), au_papers))
   return reduce(get_union, affiliations, set())
 
@@ -212,11 +197,12 @@ async def test_author_in_affiliation(auid, afid):
 # the first two do the same thing as its name stated, note that they are primitive up to asynchronous.
 # `prefetch` fetches ALL asynchronous stuffs that `solve_2hop` needs during computation, so it can run
 # concurrently with `get_id_type`.
-# `solve` returns a list of futures (tasks) to be executed (asyncio.wait with timeout) by caller.
+# `solve` returns two list of futures (tasks) to be executed, one is pure computation, another one requires some 
+# network IO. Pure computation is run in another thread to avoid blocking main thread.
 # See pp_solver.solve for an example.
 class pp_solver(object):
   @staticmethod
-  async def solve_1hop(paper1, paper2):
+  def solve_1hop(paper1, paper2):
     return [(paper1.id, paper2.id)] if paper2.id in paper1.rid else []
 
   @staticmethod
@@ -225,13 +211,11 @@ class pp_solver(object):
     return paper2_refs
 
   @staticmethod
-  async def solve_2hop(paper1, paper2, paper2_refids=None):
+  def solve_2hop(paper1, paper2, paper2_refids):
     def find_way(list1, list2):
       intersection = get_intersection(list1, list2)
       return list(map(lambda x: (paper1.id, x, paper2.id), intersection))
 
-    if paper2_refids == None:
-      paper2_refids = list(map(lambda p: p.id, await search_papers_by_ref(paper2.id, attrs=('Id',))))
     return find_way(paper1.fjcid, paper2.fjcid) + find_way(paper1.auid, paper2.auid) + find_way(paper1.rid, paper2_refids)
 
   @staticmethod
@@ -242,28 +226,28 @@ class pp_solver(object):
       paper2_refs = await pp_solver.prefetch(paper2.id)
     paper2_refids = list(map(lambda p: p.id, paper2_refs))
 
-    async def search_forward_reference(ref_paper):
-      result = await pp_solver.solve_2hop(ref_paper, paper2, paper2_refids=paper2_refids)
+    async def search_forward_reference(paper1_refids):
+      paper1_refs = await fetch_papers(paper1_refids)
+      result = []
+      for ref_paper in paper1_refs:
+        result += pp_solver.solve_2hop(ref_paper, paper2, paper2_refids)
       return list(map(lambda l: (paper1.id,) + l, result))
 
-    async def search_backward_reference(ref_paper):
+    def search_backward_reference(ref_paper):
       # search_forward_reference and search_backward_reference both search path Paper->Paper->Paper->Paper,
       # setting one paper2_refids to empty list avoids duplicate search records.
-      result = await pp_solver.solve_2hop(paper1, ref_paper, paper2_refids=[])
+      result = pp_solver.solve_2hop(paper1, ref_paper, [])
       return list(map(lambda l: l + (paper2.id,), result))
 
-    # I believe that this operation is placed at where it should be,
-    # actually this operation is considered critical and should not fail.
-    paper1_refs = await fetch_papers(paper1.rid)
-
-    tasks  = [pp_solver.solve_1hop(paper1, paper2), pp_solver.solve_2hop(paper1, paper2, paper2_refids=paper2_refids)]
-    tasks += list(map(search_forward_reference, paper1_refs))
-    tasks += list(map(search_backward_reference, paper2_refs))
-    return tasks
+    tasks_pure = [lambda: pp_solver.solve_1hop(paper1, paper2), 
+        lambda: pp_solver.solve_2hop(paper1, paper2, paper2_refids)]
+    tasks_pure += list(map(lambda p: (lambda: search_backward_reference(p)), paper2_refs))
+    tasks_io = [search_forward_reference(paper1.rid)]
+    return tasks_pure, tasks_io
 
 class aa_solver(object):
   @staticmethod
-  async def solve_1hop(auid1, auid2):
+  def solve_1hop(auid1, auid2):
     return [] # don't be confused, indeed there is no possible path lol
 
   @staticmethod
@@ -274,19 +258,17 @@ class aa_solver(object):
     return au1_papers, au2_papers
 
   @staticmethod
-  async def solve_2hop(auid1, auid2, au1_papers=None, au2_papers=None):
-    async def search_by_paper(au1_papers, au2_papers):
+  def solve_2hop(auid1, auid2, au1_papers, au2_papers):
+    def search_by_paper(au1_papers, au2_papers):
       intersection = get_intersection(map(lambda p: p.id, au1_papers), map(lambda p: p.id, au2_papers))
       return list(map(lambda id: (auid1, id, auid2), intersection))
 
-    async def search_by_affiliation(au1_papers, au2_papers):
-      aff1, aff2 = await asyncio.gather(search_affiliations_by_author(auid1, au_papers=au1_papers), 
-          search_affiliations_by_author(auid2, au_papers=au2_papers))
+    def search_by_affiliation(au1_papers, au2_papers):
+      aff1, aff2 = search_affiliations_by_author(auid1, au1_papers), search_affiliations_by_author(auid2, au2_papers)
       intersection = get_intersection(aff1, aff2)
       return list(map(lambda x: (auid1, x, auid2), intersection))
 
-    way1, way2 = await asyncio.gather(search_by_paper(au1_papers, au2_papers), search_by_affiliation(au1_papers, au2_papers))
-    return way1 + way2
+    return search_by_paper(au1_papers, au2_papers) + search_by_affiliation(au1_papers, au2_papers)
 
   @staticmethod
   async def solve(auid1, auid2, prefetched=None):
@@ -295,7 +277,7 @@ class aa_solver(object):
     else:
       au1_papers, au2_papers = await aa_solver.prefetch(auid1, auid2)
 
-    async def search_bidirection_papers():
+    def search_bidirection_papers():
       paper_id2 = set(list(map(lambda p: p.id, au2_papers)))
 
       def find(paper):
@@ -304,14 +286,16 @@ class aa_solver(object):
 
       return reduce(lambda a, b: a + b, list(map(find, au1_papers)), [])
 
-    return [aa_solver.solve_1hop(auid1, auid2),
-        aa_solver.solve_2hop(auid1, auid2, au1_papers=au1_papers, au2_papers=au2_papers),
-        search_bidirection_papers()]
+    tasks_pure = [lambda: aa_solver.solve_1hop(auid1, auid2),
+        lambda: aa_solver.solve_2hop(auid1, auid2, au1_papers, au2_papers),
+        lambda: search_bidirection_papers()]
+    tasks_io = []
+    return tasks_pure, tasks_io
 
 # TODO: test it
 class ap_solver(object):
   @staticmethod
-  async def solve_1hop(auid, paper):
+  def solve_1hop(auid, paper):
     return [(auid, paper.id)] if auid in paper.auid else []
 
   @staticmethod
@@ -319,13 +303,12 @@ class ap_solver(object):
     (au_papers, affiliations), paper_refs, au_ref_paper_ids = await asyncio.gather(
         search_papers_and_affiliations_by_author(auid),
         search_papers_by_ref(paper_id, attrs=('Id',)),
-        search_paper_ids_by_author_and_ref(auid, paper_id))
+        search_paper_ids_by_author_and_ref(auid, paper_id)) 
+    # Note: seems the last operation can be computed from the first two, but don't do it because 'count' may not suffice.
     return (au_papers, affiliations), paper_refs, au_ref_paper_ids
 
   @staticmethod
-  async def solve_2hop(auid, paper, au_ref_paper_ids=None):
-    if au_ref_paper_ids == None:
-      au_ref_paper_ids = search_paper_ids_by_author_and_ref(auid, paper.id)
+  def solve_2hop(auid, paper, au_ref_paper_ids):
     return list(map(lambda id: (auid, id, paper.id), au_ref_paper_ids))
 
   @staticmethod
@@ -336,8 +319,8 @@ class ap_solver(object):
       (au_papers, affiliations), paper_refs, au_ref_paper_ids = await ap_solver.prefetch(auid, paper.id)
     paper_refids = list(map(lambda p: p.id, paper_refs))
 
-    async def search_forward_paper(paper1):
-      ways = await pp_solver.solve_2hop(paper1, paper, paper2_refids=paper_refids)
+    def search_forward_paper(paper1):
+      ways = pp_solver.solve_2hop(paper1, paper, paper_refids)
       return list(map(lambda l: (auid,) + l, ways))
 
     async def search_both_affiliation_and_author(afid, auid2):
@@ -345,14 +328,15 @@ class ap_solver(object):
         return [(auid, afid, auid2, paper.id)]
       return []
 
-    tasks = [ap_solver.solve_1hop(auid, paper), ap_solver.solve_2hop(auid, paper, au_ref_paper_ids=au_ref_paper_ids)]
-    tasks += list(map(search_forward_paper, au_papers))
-    tasks += [search_both_affiliation_and_author(afid, auid2) for afid in affiliations for auid2 in paper.auid]
-    return tasks
+    tasks_pure = [lambda: ap_solver.solve_1hop(auid, paper), 
+        lambda: ap_solver.solve_2hop(auid, paper, au_ref_paper_ids)]
+    tasks_pure += list(map(lambda p: (lambda: search_forward_paper(p)), au_papers))
+    tasks_io = [search_both_affiliation_and_author(afid, auid2) for afid in affiliations for auid2 in paper.auid]
+    return tasks_pure, tasks_io
 
 class pa_solver(object):
   @staticmethod
-  async def solve_1hop(paper, auid):
+  def solve_1hop(paper, auid):
     return [(paper.id, auid)] if auid in paper.auid else []
 
   @staticmethod
@@ -361,10 +345,8 @@ class pa_solver(object):
     return au_papers, affiliations
 
   @staticmethod
-  async def solve_2hop(paper, auid, au_papers=None):
+  def solve_2hop(paper, auid, au_papers):
     rid_set = set(paper.rid)
-    if au_papers == None:
-      au_papers = await search_papers_by_author(auid, attrs=('Id',))
     ok_papers = list(filter(lambda p: p.id in rid_set, au_papers))
     return list(map(lambda mp: (paper.id, mp.id, auid), ok_papers))
 
@@ -375,11 +357,17 @@ class pa_solver(object):
     else:
       au_papers, affiliations = await pa_solver.prefetch(auid)
 
-    async def search_backward_paper(paper2):
-      ways = await pp_solver.solve_2hop(paper, paper2, paper2_refids=[])
+    async def search_backward_paper(paper2_list, paper):
+      # ALRAM: paper1_refs.rid is a set!!!
       paper1_refs = await fetch_papers(paper.rid, attrs=('Id','RId'))
       if paper1_refs:
-        ways += [(paper.id, paper1.id, paper2.id) for paper1 in paper1_refs if paper2.id in paper1.rid]
+        for p in paper1_refs:
+          p.rid = set(p.rid)
+      ways = []
+      for paper2 in paper2_list:
+        ways += pp_solver.solve_2hop(paper, paper2, [])
+        if paper1_refs:
+          ways += [(paper.id, paper1.id, paper2.id) for paper1 in paper1_refs if paper2.id in paper1.rid]
       return list(map(lambda l: l + (auid,), ways))
 
     async def search_both_author_and_affiliation(auid2, afid):
@@ -387,14 +375,14 @@ class pa_solver(object):
         return [(paper.id, auid2, afid, auid)]
       return []
 
-    tasks  = [pa_solver.solve_1hop(paper, auid), pa_solver.solve_2hop(paper, auid, au_papers=au_papers)]
-    tasks += list(map(search_backward_paper, au_papers))
-    tasks += [search_both_author_and_affiliation(auid2, afid) for afid in affiliations for auid2 in paper.auid]
-    return tasks
+    tasks_pure = [lambda: pa_solver.solve_1hop(paper, auid), 
+        lambda: pa_solver.solve_2hop(paper, auid, au_papers)]
+    tasks_io  = [search_backward_paper(au_papers, paper)]
+    tasks_io += [search_both_author_and_affiliation(auid2, afid) for afid in affiliations for auid2 in paper.auid]
+    return tasks_pure, tasks_io
 
 async def solve(id1, id2):
   set_start_time()
-  enter_aggressive() # TODO: with syntax
 
   tasks = list(map(asyncio.ensure_future, [get_id_type(id1, id2),
     pp_solver.prefetch(id2),
@@ -436,17 +424,28 @@ async def solve(id1, id2):
         break
   if task_index == 0:
     logger.error('type-unknown found id=%d,%d' % (id1, id2))
-    leave_aggressive()
     return []
   for task in tasks:
     task.cancel()
   logger.info('solving test (%d,%s),(%d,%s)' % (id1, show_type(types[0][0]), id2, show_type(types[1][0])))
+
   # logger.info('INIT SOLVER SECTION')
-  fs = await fs
-  leave_aggressive()
+  tasks_pure, tasks_io = await fs
   # logger.info('SOLVE ALL TASKS SECTION')
-  done, _ = await asyncio.wait(fs, timeout=time_limit-get_elapsed_time())
-  return make_unique(reduce(lambda l1, l2: l1 + l2, map(lambda f: f.result(), done), []))
+
+  def run_tasks_pure(tasks):
+    result = []
+    for task in tasks:
+      result += task()
+    return result
+
+  computation = asyncio.get_event_loop().run_in_executor(None, run_tasks_pure, tasks_pure)
+  if tasks_io:
+    io_done, _ = await asyncio.wait(tasks_io, timeout=time_limit-get_elapsed_time())
+  else:
+    io_done = []
+  pure_result = await computation
+  return make_unique(pure_result + reduce(lambda l1, l2: l1 + l2, map(lambda f: f.result(), io_done), []))
 
 async def bop_handler(request):
   logger.info(' ')

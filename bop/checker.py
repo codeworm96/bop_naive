@@ -1,4 +1,5 @@
 import asyncio, aiohttp
+from sys import argv
 
 client_session = aiohttp.ClientSession()
 
@@ -105,6 +106,8 @@ async def test_connected(a, b):
 
 async def check(id1, id2, paths):
   async def check1(id1, id2, path):
+    if len(path) == 1 or len(path) > 4:
+      return False
     if id1 != path[0] or id2 != path[-1]:
       return False
     tasks = list(map(asyncio.ensure_future, map(get_type, path)))
@@ -122,14 +125,22 @@ async def check(id1, id2, paths):
     if not ok:
       print('%s FAIL!!!' % (str(path)))
     
-async def test():
+async def test(test_case):
   with open('tests.txt', 'r') as f:
     n = int(f.readline())
+    if test_case == None:
+      test_case = range(0, n)
     for i in range(n):
       id1, id2 = map(int, f.readline().split())
-      paths = eval(f.readline())
-      await check(id1, id2, paths)
+      d = f.readline()
+      if i in test_case:
+        paths = eval(d)
+        await check(id1, id2, paths)
   print(mask)
 
+test_case = None
+if len(argv) == 2:
+  test_case = [int(argv[1]) - 1]
+
 loop = asyncio.get_event_loop()
-loop.run_until_complete(test())
+loop.run_until_complete(test(test_case))
