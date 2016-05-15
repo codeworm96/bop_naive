@@ -108,8 +108,9 @@ async def get_id_type(id1, id2):
     if len(resp) == 1:
       entity = resp[0]
       if 'Ti' in entity:
-        paper = parse_paper_json(entity)
-        return (TYPE_PAPER, paper), (TYPE_PAPER, paper)
+        paper1 = parse_paper_json(entity)
+        paper2 = parse_paper_json(entity)
+        return (TYPE_PAPER, paper1), (TYPE_PAPER, paper2)
     return (TYPE_AUTHOR, id1), (TYPE_AUTHOR, id2)
   else:
     if len(resp) == 2:
@@ -241,8 +242,9 @@ class pp_solver(object):
     async def search_forward_reference(paper1):
       paper1_refs = await fetch_papers(paper1.rid)
       result = []
-      for ref_paper in paper1_refs:
-        result += pp_solver.solve_2hop(ref_paper, paper2, paper2_refids)
+      if paper1_refs:
+        for ref_paper in paper1_refs:
+          result += pp_solver.solve_2hop(ref_paper, paper2, paper2_refids)
       return list(map(lambda l: (paper1.id,) + l, result))
 
     def search_backward_reference(ref_paper):
@@ -273,7 +275,7 @@ class aa_solver(object):
   def solve_2hop(auid1, auid2, au1_papers, au2_papers):
     def search_by_paper(au1_papers, au2_papers):
       intersection = get_intersection(map(lambda p: p.id, au1_papers), map(lambda p: p.id, au2_papers))
-      return list(map(lambda id: (auid1, id, auid2), intersection))
+      return list(map(lambda x: (auid1, x, auid2), intersection))
 
     def search_by_affiliation(au1_papers, au2_papers):
       aff1, aff2 = search_affiliations_by_author(auid1, au1_papers), search_affiliations_by_author(auid2, au2_papers)
@@ -294,7 +296,7 @@ class aa_solver(object):
 
       def find(paper):
         intersection = get_intersection(paper.rid, paper_id2)
-        return list(map(lambda id: (auid1, paper.id, id, auid2), intersection))
+        return list(map(lambda x: (auid1, paper.id, x, auid2), intersection))
 
       return reduce(lambda a, b: a + b, list(map(find, au1_papers)), [])
 
@@ -304,7 +306,6 @@ class aa_solver(object):
     tasks_io = []
     return tasks_pure, tasks_io
 
-# TODO: test it
 class ap_solver(object):
   @staticmethod
   def solve_1hop(auid, paper):
@@ -321,7 +322,7 @@ class ap_solver(object):
 
   @staticmethod
   def solve_2hop(auid, paper, au_ref_paper_ids):
-    return list(map(lambda id: (auid, id, paper.id), au_ref_paper_ids))
+    return list(map(lambda x: (auid, x, paper.id), au_ref_paper_ids))
 
   @staticmethod
   async def solve(auid, paper, prefetched=None):
