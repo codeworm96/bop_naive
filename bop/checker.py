@@ -132,8 +132,10 @@ async def test(test_case):
       test_case = range(0, n)
     for i in range(n):
       id1, id2 = map(int, f.readline().split())
-      paths = eval(f.readline())
-      await check(id1, id2, paths)
+      d = f.readline()
+      if i in test_case:
+        paths = eval(d)
+        await check(id1, id2, paths)
   print(mask)
 
 test_case = None

@@ -19,8 +19,9 @@ async def test(test_case):
     if not test_case:
       test_case = range(0, n)
     for i in range(n):
+      id1, id2 = map(int, f.readline().split())
+      expect = list(map(tuple, eval(f.readline())))
       if i in test_case:
-        id1, id2 = map(int, f.readline().split())
         expect = list(map(tuple, eval(f.readline())))
         actual = await bop.bop.solve(id1, id2)
         expect.sort()
