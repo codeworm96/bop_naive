@@ -17,6 +17,7 @@ default_attrs = ('Id','F.FId','C.CId','J.JId','AA.AuId','AA.AfId','RId')
 # parameters (need adjusting)
 default_count = 50000
 time_limit = 8
+io_time_limit = 2
 
 def set_start_time():
   global start_time
@@ -57,7 +58,7 @@ async def send_http_request(expr, count=None, attributes=None, critical=True):
   if critical:
     done, pending = await asyncio.wait([shoot()]*3, return_when=asyncio.FIRST_COMPLETED)
   else:
-    done, pending = await asyncio.wait([shoot()], timeout=time_limit-2-get_elapsed_time())
+    done, pending = await asyncio.wait([shoot()], timeout=io_time_limit)
   for future in pending:
     future.cancel()
   done = list(done)
