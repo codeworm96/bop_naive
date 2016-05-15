@@ -1,14 +1,17 @@
 import asyncio, aiohttp
 import logging, time
 import urllib
+import random
 from aiohttp import web
 from sys import argv, stderr
 from functools import reduce
 
 start_time = 0
-client_session = aiohttp.ClientSession(connector=aiohttp.TCPConnector(keepalive_timeout=50))
+client_session = aiohttp.ClientSession(connector=aiohttp.TCPConnector(keepalive_timeout=58))
 logger = logging.getLogger(__name__)
 
+subscription_key = 'f7cc29509a8443c5b3a5e56b0e38b5a6'
+bop_url = 'http://oxfordhk.azure-api.net/academic/v1.0/evaluate'
 default_attrs = ('Id','F.FId','C.CId','J.JId','AA.AuId','AA.AfId','RId')
 
 # parameters (need adjusting)
@@ -36,8 +39,6 @@ def split_list(l, k):
   return [l[x:x+k] for x in range(0, len(l), k)]
 
 async def send_http_request(expr, count=None, attributes=None, critical=True):
-  subscription_key = 'f7cc29509a8443c5b3a5e56b0e38b5a6'
-  bop_url = 'http://oxfordhk.azure-api.net/academic/v1.0/evaluate'
   params = {'expr': expr, 'subscription-key': subscription_key}
   if count:
     params['count'] = count
@@ -478,7 +479,22 @@ if __name__ == '__main__':
       datefmt='%m-%d %H:%M:%S',
       level=logging.DEBUG)
 
-  app = web.Application(loop=asyncio.get_event_loop())
+  loop = asyncio.get_event_loop()
+
+  async def tcp_shake():
+    async def tcp_shake_once():
+      x = random.randint(100000000, 200000000)
+      params = {'expr': 'Id=%d' % (x), 'subscription-key': subscription_key, 'count': 1, 'attributes': 'Id'}
+      async with client_session.head(bop_url, params=params) as resp:
+        asyncio.sleep(0.03) # yield
+    while True:
+      await tcp_shake_once()
+      await asyncio.sleep(52)
+
+  for _ in range(20): # about 24 connections are needed in first round query
+    asyncio.ensure_future(tcp_shake())
+
+  app = web.Application(loop=loop)
   app.router.add_route('GET', '/bop', bop_handler)
 
   logger.info('bop server has started, listening on port %d' % (port))
