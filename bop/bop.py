@@ -6,8 +6,7 @@ from sys import argv, stderr
 from functools import reduce
 
 start_time = 0
-# TODO: keep-alive pools timeout
-client_session = aiohttp.ClientSession()
+client_session = aiohttp.ClientSession(connector=aiohttp.TCPConnector(keepalive_timeout=50))
 logger = logging.getLogger(__name__)
 
 default_attrs = ('Id','F.FId','C.CId','J.JId','AA.AuId','AA.AfId','RId')
@@ -47,7 +46,7 @@ async def send_http_request(expr, count=None, attributes=None, critical=True):
 
   async def shoot():
     async with client_session.get(bop_url, params=params) as resp:
-      logger.info('sending HTTP request: %s' % urllib.parse.unquote(resp.url))
+      # logger.info('sending HTTP request: %s' % urllib.parse.unquote(resp.url))
       json = await resp.json()
       if 'entities' in json:
         return json['entities']
