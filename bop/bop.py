@@ -460,7 +460,7 @@ async def bop_handler(request):
   logger.info('accepting request with id1=%d id2=%d' % (id1, id2))
   result = await solve(id1, id2)
   logger.info('%d->%d: elapsed_time=%f' % (id1, id2, get_elapsed_time()))
-  logger.info('%d->%d: %d path(s) found, %s' % (id1, id2, len(result), str(result)))
+  logger.info('%d->%d: %d path(s) found' % (id1, id2, len(result)))
   return web.json_response(result)
 
 if __name__ == '__main__':
