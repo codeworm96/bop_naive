@@ -31,9 +31,8 @@ def get_intersection(b1, b2):
 def get_union(b1, b2):
   return set(b1).union(set(b2))
 
-# TODO: searching strategy shall make sure there is no duplicate element
 def make_unique(l):
-  return l # list(set(l))
+  return list(set(l))
 
 def split_list(l, k):
   return [l[x:x+k] for x in range(0, len(l), k)]
@@ -134,6 +133,7 @@ async def get_id_type(id1, id2):
 async def fetch_papers(paper_ids, attrs=default_attrs):
   if paper_ids == []:
     return []
+  paper_ids = make_unique(paper_ids)
   paper_ids_group = split_list(paper_ids, 23) # split list to avoid HTTP error 'Request URL Too Long'
 
   async def fetch_papers_safe(paper_ids):
@@ -237,8 +237,8 @@ class pp_solver(object):
       paper2_refs = await pp_solver.prefetch(paper2.id)
     paper2_refids = list(map(lambda p: p.id, paper2_refs))
 
-    async def search_forward_reference(paper1_refids):
-      paper1_refs = await fetch_papers(paper1_refids)
+    async def search_forward_reference(paper1):
+      paper1_refs = await fetch_papers(paper1.rid)
       result = []
       for ref_paper in paper1_refs:
         result += pp_solver.solve_2hop(ref_paper, paper2, paper2_refids)
@@ -253,7 +253,7 @@ class pp_solver(object):
     tasks_pure = [lambda: pp_solver.solve_1hop(paper1, paper2), 
         lambda: pp_solver.solve_2hop(paper1, paper2, paper2_refids)]
     tasks_pure += list(map(lambda p: (lambda: search_backward_reference(p)), paper2_refs))
-    tasks_io = [search_forward_reference(paper1.rid)]
+    tasks_io = [search_forward_reference(paper1)]
     return tasks_pure, tasks_io
 
 class aa_solver(object):
@@ -342,7 +342,8 @@ class ap_solver(object):
     tasks_pure = [lambda: ap_solver.solve_1hop(auid, paper), 
         lambda: ap_solver.solve_2hop(auid, paper, au_ref_paper_ids)]
     tasks_pure += list(map(lambda p: (lambda: search_forward_paper(p)), au_papers))
-    tasks_io = [search_both_affiliation_and_author(afid, auid2) for afid in affiliations for auid2 in paper.auid]
+    auid_unique = make_unique(paper.auid)
+    tasks_io = [search_both_affiliation_and_author(afid, auid2) for afid in affiliations for auid2 in auid_unique]
     return tasks_pure, tasks_io
 
 class pa_solver(object):
@@ -389,7 +390,8 @@ class pa_solver(object):
     tasks_pure = [lambda: pa_solver.solve_1hop(paper, auid), 
         lambda: pa_solver.solve_2hop(paper, auid, au_papers)]
     tasks_io  = [search_backward_paper(au_papers, paper)]
-    tasks_io += [search_both_author_and_affiliation(auid2, afid) for afid in affiliations for auid2 in paper.auid]
+    auid_unique = make_unique(paper.auid)
+    tasks_io += [search_both_author_and_affiliation(auid2, afid) for afid in affiliations for auid2 in auid_unique]
     return tasks_pure, tasks_io
 
 async def solve(id1, id2):
@@ -456,7 +458,8 @@ async def solve(id1, id2):
   else:
     io_done = []
   pure_result = await computation
-  return make_unique(pure_result + reduce(lambda l1, l2: l1 + l2, map(lambda f: f.result(), io_done), []))
+  # TODO: make_unique
+  return pure_result + reduce(lambda l1, l2: l1 + l2, map(lambda f: f.result(), io_done), [])
 
 async def bop_handler(request):
   logger.info(' ')
