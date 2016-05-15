@@ -491,7 +491,7 @@ if __name__ == '__main__':
       await tcp_shake_once()
       await asyncio.sleep(52)
 
-  for _ in range(20): # about 24 connections are needed in first round query
+  for _ in range(28): # about 24 connections are needed in first round query
     asyncio.ensure_future(tcp_shake())
 
   app = web.Application(loop=loop)
